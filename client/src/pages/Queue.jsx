@@ -406,13 +406,13 @@ export default function Queue({ user }) {
 
                                     <div className="grid grid-cols-2 gap-2">
                                         {/* Option 1: Guest plays alone */}
-                                        <button
+                                        {/* <button
                                             className="btn btn-outline btn-accent btn-sm"
                                             disabled={!guestName.trim() || loading}
                                             onClick={() => handleGuestAction('SOLO')}
                                         >
                                             Guest Solo
-                                        </button>
+                                        </button> */}
 
                                         {/* Option 2: Guest plays WITH ME */}
                                         <button
