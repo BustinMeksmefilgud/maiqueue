@@ -141,7 +141,9 @@ vite.config.ts.timestamp-*
 # --- Python Backend ---
 server/venv/
 server/__pycache__/
+server/serviceAccountKey.json
 *.pyc
 
 # --- Environment Variables ---
 .env
+
