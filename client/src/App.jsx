@@ -1,10 +1,10 @@
 import './App.css';
 import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { doc, getDoc } from "firebase/firestore";
+import { onSnapshot, doc, getDoc } from "firebase/firestore";
 import { auth, db } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-
+import { User } from "./model/User";
 
 // Import Pages
 import Queue from './pages/Queue';
@@ -25,17 +25,18 @@ function App() {
       
       if (currentUser) {
         try {
-          const docRef = doc(db, "users", currentUser.uid);
-          const docSnap = await getDoc(docRef);
-
+          const userRef = doc(db, "users", currentUser.uid);
+         const unsubscribeProfile = onSnapshot(userRef, (docSnap) => {
           if (docSnap.exists()) {
-            setUser(docSnap.data());
-            console.log("User spawned")
-          } else {
-            console.error("No profile found:", error);
-            setUser(guestUser);
+            // Every time the DB changes (e.g. Branch switch), this runs!
+            // We create a fresh User object with the NEW data.
+            console.log(docSnap.data())
+            const userEntity = new User({ uid: currentUser.uid, ...docSnap.data() });
+            
+            console.log("Profile updated!", userEntity); // Debugging
+            setUser(userEntity);
           }
-          setLoading(false);
+        });
         } catch (e) {
           console.error("Error fetching user profile:", error);
           setUser(guestUser);

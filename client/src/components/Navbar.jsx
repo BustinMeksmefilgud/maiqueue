@@ -11,26 +11,26 @@ export default function Navbar({ user, loading }) {
   }
 
   const handleLogout = async () => {
-    await logoutUser();
+    await logoutUser(user?.uid);
     navigate("/login");
-    };
-    
-const handleLogin = async () => {
+  };
+
+  const handleLogin = async () => {
     navigate("/login");
   };
 
   return (
     // DaisyUI Navbar component with a transparent background
     <div className="navbar bg-black/20 text-zinc-100 backdrop-blur-sm sticky top-0 z-50">
-      
+
       {/* Left Side: Logo/Brand */}
       <div className="flex-1">
         <Link to="/" className="btn btn-ghost text-xl font-bold text-teal-100">
           MaiQueue
         </Link>
       </div>
-        <div className="flex-none gap-2">
-        
+      <div className="flex-none gap-2">
+
         {/* CASE 1: LOADING (Show Skeleton) */}
         {loading ? (
           <div className="flex items-center gap-3 animate-pulse">
@@ -47,7 +47,7 @@ const handleLogin = async () => {
                 <span className="hidden sm:inline text-sm text-teal-200 mr-2 font-medium">
                   {user.username}
                 </span>
-                <button 
+                <button
                   onClick={handleLogout}
                   className="btn btn-sm btn-error btn-outline text-white hover:bg-red-500/20"
                 >
@@ -59,7 +59,7 @@ const handleLogin = async () => {
                 <span className="hidden sm:inline text-sm text-teal-200 mr-2">
                   Guest
                 </span>
-                <button 
+                <button
                   onClick={handleLogin}
                   className="btn btn-sm btn-error btn-outline text-white hover:bg-red-500/20"
                 >
@@ -69,7 +69,7 @@ const handleLogin = async () => {
             )}
           </>
         )}
-        
+
       </div>
     </div>
   );
