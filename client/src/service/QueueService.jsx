@@ -2,6 +2,7 @@ import { auth, db } from "../firebase"; // <--- Import db
 import {
   addDoc,
   getDocs,
+  getDoc,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -15,7 +16,8 @@ import {
   serverTimestamp,
   arrayUnion,
   increment,
-  writeBatch
+  writeBatch,
+  limit
 } from "firebase/firestore";
 import { User } from "../model/User";
 import { QueueItem } from "../model/Queue";
@@ -58,6 +60,25 @@ export const subscribeToQueue = (callback, branchId) => {
 
   return unsubscribe;
 }
+
+export const getBranchCapacity = async (branchId) => {
+    try {
+        const docRef = doc(db, "branches", branchId);
+        const docSnap = await getDoc(docRef);
+
+        if (docSnap.exists()) {
+            const data = docSnap.data();
+            // Return the count, or default to 1 if the field is missing
+            return data.cabinetCount || 1; 
+        } else {
+            console.warn(`Branch ${branchId} not found, defaulting to 1 machine.`);
+            return 1;
+        }
+    } catch (e) {
+        console.error("Error fetching branch capacity:", e);
+        return 1; // Safe default
+    }
+};
 
 export const addGuestToWaitingList = async (guestName, branch, uid) => {
   const GUEST_LIMIT = 2;
@@ -125,9 +146,22 @@ export const removeGuestFromList = async (guest) => {
   }
 };
 
-export const joinQueue = async (userId, branchId, mode) => {
+export const joinQueue = async (userId, branchId, mode, cabCount = 1) => {
   try {
     let candidateSessionId = null;
+    let isMachineFree = true
+
+    const qActive = query(
+      collection(db, "queue"), // or "queue_sessions" depending on your collection name
+      where("branchId", "==", branchId),
+      where("status", "==", QueueStatus.PLAYING),
+    );
+    const activeSnap = await getDocs(qActive);
+    const busyCabsCount = activeSnap.size;
+    
+    if (busyCabsCount < cabCount) {
+        isMachineFree = true;
+    }
 
     if (mode === QueueType.SYNC) {
       const q = query(
@@ -142,7 +176,6 @@ export const joinQueue = async (userId, branchId, mode) => {
         candidateSessionId = snapshot.docs[0].id;
       }
     }
-    console.log("Can", candidateSessionId)
     await runTransaction(db, async (transaction) => {
       const userRef = doc(db, "users", userId);
       const userSnap = await transaction.get(userRef);
@@ -152,10 +185,10 @@ export const joinQueue = async (userId, branchId, mode) => {
       const userData = userSnap.data();
       const myUsername = userData.username || "Unknown Player";
 
-      
+
       if (userData.status !== UserStatus.WAITING) {
-                throw "You must join the Waiting List before joining the Queue!";
-            }
+        throw "You must join the Waiting List before joining the Queue!";
+      }
 
       if (userData.status === UserStatus.IN_QUEUE || userData.status === UserStatus.PLAYING) {
         throw "You are already in a queue!";
@@ -179,11 +212,15 @@ export const joinQueue = async (userId, branchId, mode) => {
         transaction.update(sessionRefToJoin, {
           players: arrayUnion(userId),
           playerNames: arrayUnion(myUsername),
-          playerCount: increment(1)
+          playerCount: increment(1),
+          ...(isMachineFree && { 
+              status: QueueStatus.PLAYING, 
+              startedAt: serverTimestamp() 
+          })
         });
 
         transaction.update(userRef, {
-          status: UserStatus.IN_QUEUE,
+          status: isMachineFree ? UserStatus.PLAYING : UserStatus.IN_QUEUE,
           currentQueueId: sessionRefToJoin.id
         });
 
@@ -191,11 +228,16 @@ export const joinQueue = async (userId, branchId, mode) => {
       } else {
         const newSessionRef = doc(collection(db, "queue"));
 
+        const shouldStartNow = isMachineFree && mode === QueueType.SOLO;
+
+        const initialStatus = shouldStartNow ? QueueStatus.PLAYING : QueueStatus.QUEUED;
+        const initialStartedAt = shouldStartNow ? serverTimestamp() : null;
+
         const newSessionData = {
           sessionId: newSessionRef.id,
           branchId: branchId,
           type: mode, // SOLO or SYNC
-          status: QueueStatus.QUEUED,
+          status: initialStatus,
 
           // Arrays for flexible player management
           players: [userId],
@@ -203,7 +245,7 @@ export const joinQueue = async (userId, branchId, mode) => {
           playerCount: 1,
 
           createdAt: serverTimestamp(),
-          startedAt: null,
+          startedAt: initialStartedAt,
           endedAt: null
         }
 
@@ -211,7 +253,7 @@ export const joinQueue = async (userId, branchId, mode) => {
 
         // Link user to this new session
         transaction.update(userRef, {
-          status: UserStatus.IN_QUEUE,
+          status: isMachineFree ? UserStatus.PLAYING : UserStatus.IN_QUEUE,
           currentQueueId: newSessionRef.id
         });
 
@@ -225,145 +267,145 @@ export const joinQueue = async (userId, branchId, mode) => {
 }
 
 export const leaveQueue = async (userId, queueId) => {
-    try {
-        await runTransaction(db, async (transaction) => {
-            const sessionRef = doc(db, "queue", queueId);
-            const userRef = doc(db, "users", userId);
-            
-            const sessionSnap = await transaction.get(sessionRef);
-            if (!sessionSnap.exists()) throw "Queue session not found!";
+  try {
+    await runTransaction(db, async (transaction) => {
+      const sessionRef = doc(db, "queue", queueId);
+      const userRef = doc(db, "users", userId);
 
-          const sessionData = sessionSnap.data();
-          
-          const playerRefs = sessionData.players.map(uid => doc(db, "users", uid));
-          const playerSnaps = await Promise.all(playerRefs.map(ref => transaction.get(ref)));
-          
+      const sessionSnap = await transaction.get(sessionRef);
+      if (!sessionSnap.exists()) throw "Queue session not found!";
 
-          const idsToRemove = [userId];
+      const sessionData = sessionSnap.data();
 
-            playerSnaps.forEach(snap => {
-                if (snap.exists()) {
-                    const pData = snap.data();
-                    // If this player was added by the user leaving, they go too.
-                    if (pData.addedBy === userId) {
-                        idsToRemove.push(pData.uid);
-                    }
-                }
-            });
-
-    
-            const newPlayers = sessionData.players.filter(uid => !idsToRemove.includes(uid));
-            const newNames = sessionData.playerNames.filter((_, idx) => {
-                const uidAtThisIndex = sessionData.players[idx];
-                return !idsToRemove.includes(uidAtThisIndex);
-            });
-            const newCount = newPlayers.length;
-
-  
-            if (newCount === 0) {
-                transaction.delete(sessionRef);
-            } else {
-                transaction.update(sessionRef, {
-                    players: newPlayers,
-                    playerNames: newNames,
-                    playerCount: newCount
-                });
-            }
+      const playerRefs = sessionData.players.map(uid => doc(db, "users", uid));
+      const playerSnaps = await Promise.all(playerRefs.map(ref => transaction.get(ref)));
 
 
-            idsToRemove.forEach(uid => {
-                const userRef = doc(db, "users", uid);
-                transaction.update(userRef, {
-                    status: UserStatus.WAITING, // Everyone falls back to waiting list
-                    currentQueueId: null
-                });
-            });
+      const idsToRemove = [userId];
+
+      playerSnaps.forEach(snap => {
+        if (snap.exists()) {
+          const pData = snap.data();
+          // If this player was added by the user leaving, they go too.
+          if (pData.addedBy === userId) {
+            idsToRemove.push(pData.uid);
+          }
+        }
+      });
+
+
+      const newPlayers = sessionData.players.filter(uid => !idsToRemove.includes(uid));
+      const newNames = sessionData.playerNames.filter((_, idx) => {
+        const uidAtThisIndex = sessionData.players[idx];
+        return !idsToRemove.includes(uidAtThisIndex);
+      });
+      const newCount = newPlayers.length;
+
+
+      if (newCount === 0) {
+        transaction.delete(sessionRef);
+      } else {
+        transaction.update(sessionRef, {
+          players: newPlayers,
+          playerNames: newNames,
+          playerCount: newCount
         });
-        
-        console.log("Left queue successfully");
+      }
 
-    } catch (e) {
-        console.error("Error leaving queue:", e);
-        throw e;
-    }
+
+      idsToRemove.forEach(uid => {
+        const userRef = doc(db, "users", uid);
+        transaction.update(userRef, {
+          status: UserStatus.WAITING, // Everyone falls back to waiting list
+          currentQueueId: null
+        });
+      });
+    });
+
+    console.log("Left queue successfully");
+
+  } catch (e) {
+    console.error("Error leaving queue:", e);
+    throw e;
+  }
 };
 
 export const addGuestSolo = async (hostUid, branchId, guestName) => {
-    // 1. Create Guest Profile
-    const newGuestRef = doc(collection(db, "users"));
-    await setDoc(newGuestRef, {
-        uid: newGuestRef.id,
-        username: guestName,
-        isGuest: true,
-        status: UserStatus.WAITING, // Set to WAITING so joinQueue accepts them
-        branchId: branchId,
-        addedBy: hostUid,
-        createdAt: serverTimestamp()
-    });
+  // 1. Create Guest Profile
+  const newGuestRef = doc(collection(db, "users"));
+  await setDoc(newGuestRef, {
+    uid: newGuestRef.id,
+    username: guestName,
+    isGuest: true,
+    status: UserStatus.WAITING, // Set to WAITING so joinQueue accepts them
+    branchId: branchId,
+    addedBy: hostUid,
+    createdAt: serverTimestamp()
+  });
 
-    // 2. Immediate Queue Join
-    await joinQueue(newGuestRef.id, branchId, QueueType.SOLO);
+  // 2. Immediate Queue Join
+  await joinQueue(newGuestRef.id, branchId, QueueType.SOLO);
 };
 
 // MODE B: Guest plays WITH Host (Premade Pair)
 export const pairHostWithGuest = async (hostUid, branchId, guestName) => {
-    try {
-        await runTransaction(db, async (transaction) => {
-            const hostRef = doc(db, "users", hostUid);
-            const hostSnap = await transaction.get(hostRef);
-            if (!hostSnap.exists()) throw "Host not found";
-            const hostData = hostSnap.data();
+  try {
+    await runTransaction(db, async (transaction) => {
+      const hostRef = doc(db, "users", hostUid);
+      const hostSnap = await transaction.get(hostRef);
+      if (!hostSnap.exists()) throw "Host not found";
+      const hostData = hostSnap.data();
 
-            // Host must be available (ONLINE or WAITING)
-            if (hostData.status === UserStatus.IN_QUEUE || hostData.status === UserStatus.PLAYING) {
-                throw "You are already in a game/queue! Leave first to pair with a guest.";
-            }
+      // Host must be available (ONLINE or WAITING)
+      if (hostData.status === UserStatus.IN_QUEUE || hostData.status === UserStatus.PLAYING) {
+        throw "You are already in a game/queue! Leave first to pair with a guest.";
+      }
 
-            // 2. Create Guest (In-Memory for Transaction)
-            const newGuestRef = doc(collection(db, "users"));
-            const guestData = {
-                uid: newGuestRef.id,
-                username: guestName,
-                isGuest: true,
-                status: UserStatus.IN_QUEUE, // Going straight to queue
-                branchId: branchId,
-                addedBy: hostUid,
-                currentQueueId: null, // Will fill below
-                createdAt: serverTimestamp()
-            };
+      // 2. Create Guest (In-Memory for Transaction)
+      const newGuestRef = doc(collection(db, "users"));
+      const guestData = {
+        uid: newGuestRef.id,
+        username: guestName,
+        isGuest: true,
+        status: UserStatus.IN_QUEUE, // Going straight to queue
+        branchId: branchId,
+        addedBy: hostUid,
+        currentQueueId: null, // Will fill below
+        createdAt: serverTimestamp()
+      };
 
-            // 3. Create a PREMADE Sync Session
-            // We do NOT look for existing sessions. We create a private one for this pair.
-            const newSessionRef = doc(collection(db, "queue"));
-            const newSessionId = newSessionRef.id;
+      // 3. Create a PREMADE Sync Session
+      // We do NOT look for existing sessions. We create a private one for this pair.
+      const newSessionRef = doc(collection(db, "queue"));
+      const newSessionId = newSessionRef.id;
 
-            const sessionData = {
-                id: newSessionId,
-                branchId: branchId,
-                type: QueueType.SYNC,
-                status: QueueStatus.QUEUED,
-                players: [hostUid, newGuestRef.id],
-                playerNames: [hostData.username, guestName], // Snapshot names
-                playerCount: 2, // Full immediately
-                createdAt: serverTimestamp(),
-            };
+      const sessionData = {
+        id: newSessionId,
+        branchId: branchId,
+        type: QueueType.SYNC,
+        status: QueueStatus.QUEUED,
+        players: [hostUid, newGuestRef.id],
+        playerNames: [hostData.username, guestName], // Snapshot names
+        playerCount: 2, // Full immediately
+        createdAt: serverTimestamp(),
+      };
 
-            // 4. Update Host Data
-            guestData.currentQueueId = newSessionId; // Link guest to session
-            
-            transaction.set(newGuestRef, guestData); // Create Guest Doc
-            transaction.set(newSessionRef, sessionData); // Create Session Doc
-            
-            transaction.update(hostRef, { // Update Host Doc
-                status: UserStatus.IN_QUEUE,
-                currentQueueId: newSessionId
-            });
-        });
-        console.log("Host and Guest paired successfully!");
-    } catch (e) {
-        console.error("Pairing failed:", e);
-        throw e;
-    }
+      // 4. Update Host Data
+      guestData.currentQueueId = newSessionId; // Link guest to session
+
+      transaction.set(newGuestRef, guestData); // Create Guest Doc
+      transaction.set(newSessionRef, sessionData); // Create Session Doc
+
+      transaction.update(hostRef, { // Update Host Doc
+        status: UserStatus.IN_QUEUE,
+        currentQueueId: newSessionId
+      });
+    });
+    console.log("Host and Guest paired successfully!");
+  } catch (e) {
+    console.error("Pairing failed:", e);
+    throw e;
+  }
 };
 
 export const startGame = async (queueId) => {
@@ -385,13 +427,13 @@ export const finishGame = async (queueId, playerIds) => {
   });
 
   playerIds.forEach(uid => {
-        const userRef = doc(db, "users", uid);
-        batch.update(userRef, {
-            status: UserStatus.WAITING, // or UserStatus.ONLINE
-            currentQueueId: null
-        });
+    const userRef = doc(db, "users", uid);
+    batch.update(userRef, {
+      status: UserStatus.WAITING, // or UserStatus.ONLINE
+      currentQueueId: null
+    });
   });
-  
+
   await batch.commit();
 }
 

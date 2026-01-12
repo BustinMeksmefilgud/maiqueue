@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react'
 import BranchSwitcher from "../components/BranchSwitcher";
+import GameTimer from "../components/GameTimer"
 import {
     addToWaitingList,
     addGuestToWaitingList,
     subscribeToWaitingList,
+    getBranchCapacity,
     subscribeToQueue,
     leaveWaitingList,
     removeGuestFromList,
@@ -26,10 +28,11 @@ export default function Queue({ user }) {
     const [queueData, setQueueData] = useState([])
     const [waitingList, setWaitingList] = useState([])
     const [guestName, setGuestName] = useState("")
+    const [machineCapacity, setMachineCapacity] = useState(1);
 
     const activeGames = queueData.filter(q => q.status === QueueStatus.PLAYING);
     const upcomingQueue = queueData.filter(q => q.status === QueueStatus.QUEUED);
-    const isMachineBusy = activeGames.length > 0;
+    const isMachineBusy = activeGames.length >= machineCapacity;
 
     const amIWaiting = waitingList.some(p => p.uid === user?.uid);
 
@@ -72,7 +75,7 @@ export default function Queue({ user }) {
 
         try {
             setLoading(true);
-            await joinQueue(user.uid, viewBranch, mode);
+            await joinQueue(user.uid, viewBranch, mode, machineCapacity);
         } catch (e) {
             alert("Could not join queue: " + e);
         } finally {
@@ -151,6 +154,16 @@ export default function Queue({ user }) {
         };
     }, [viewBranch]);
 
+    useEffect(() => {
+        const fetchCapacity = async () => {
+            if (viewBranch) {
+                const cap = await getBranchCapacity(viewBranch);
+                setMachineCapacity(cap);
+            }
+        };
+        fetchCapacity();
+    }, [viewBranch]);
+
     return (
         <div className="p-6 w-full max-w-md mx-auto">
             {user?.isGuest && (
@@ -171,39 +184,64 @@ export default function Queue({ user }) {
 
             <div className="mb-6">
                 <h2 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-2">Now Playing</h2>
-
-                {activeGames.length === 0 ? (
-                    <div className="p-6 rounded-2xl bg-black/20 border-2 border-dashed border-zinc-700 text-center text-zinc-500">
-                        Machines are empty
+                <div className="mb-6">
+                    <div className="flex justify-between items-end mb-2">
+                        <h2 className="text-sm font-bold text-zinc-400 uppercase tracking-widest">Now Playing</h2>
+                        <span className="text-xs text-zinc-500">
+                            {/* Use the state variable here */}
+                            {activeGames.length} / {machineCapacity} Machines Active
+                        </span>
                     </div>
-                ) : (
-                    <div className="grid gap-3">
-                        {activeGames.map((game) => (
-                            <div key={game.id} className="bg-gradient-to-r from-emerald-900 to-teal-900 p-5 rounded-2xl shadow-lg shadow-emerald-900/20 border border-emerald-700/50 relative overflow-hidden">
-                                {/* Glowing Effect */}
-                                <div className="absolute top-0 right-0 w-20 h-20 bg-white/10 blur-3xl rounded-full pointer-events-none"></div>
 
-                                <div className="flex justify-between items-center z-10 relative">
-                                    <div>
-                                        <h3 className="text-2xl font-black text-white tracking-tight">
-                                            {game.playerNames.join(" & ")}
-                                        </h3>
-                                        <div className="flex gap-2 mt-1">
-                                            <span className="badge badge-sm bg-black/30 border-none text-white/70">
-                                                {game.type}
-                                            </span>
-                                            <span className="text-xs text-emerald-200 animate-pulse">
-                                                • In Game
-                                            </span>
+                    <div className="grid gap-3">
+                        {/* 4. RENDER SLOTS (Use the state variable for length) */}
+                        {Array.from({ length: machineCapacity }).map((_, index) => {
+                            // ... (Inner content remains exactly the same as previous step) ...
+                            const game = activeGames[index];
+                            if (game) {
+                                return (
+                                   <div key={game.id} className="bg-gradient-to-r from-emerald-900 to-teal-900 p-5 rounded-2xl shadow-lg border border-emerald-700/50 relative overflow-hidden">
+                                    <div className="absolute top-0 right-0 w-20 h-20 bg-white/10 blur-3xl rounded-full pointer-events-none"></div>
+                                    <div className="flex justify-between items-center z-10 relative">
+                                        <div>
+                                            <h3 className="text-2xl font-black text-white tracking-tight">
+                                                {game.playerNames.join(" & ")}
+                                            </h3>
+                                            <div className="flex gap-2 mt-1">
+                                                <span className="badge badge-sm bg-black/30 border-none text-white/70">
+                                                    {game.type}
+                                                </span>
+                                                <span className="text-xs text-emerald-200 animate-pulse">
+                                                    • Cab {index + 1} Busy
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <div className="text-right bg-black/20 p-2 rounded-lg border border-white/5 backdrop-blur-sm">
+                                            {game.startedAt ? (
+                                                <GameTimer startTime={game.startedAt} />
+                                            ) : (
+                                                <span className="loading loading-dots loading-xs text-white"></span>
+                                            )}
                                         </div>
                                     </div>
-                                    {/* Optional: Timer or Icon could go here */}
-                                    <div className="text-4xl">🎮</div>
                                 </div>
-                            </div>
-                        ))}
+                                )
+                            } else {
+                                return (
+                                  <div key={`empty-${index}`} className="p-5 rounded-2xl bg-black/20 border-2 border-dashed border-zinc-700/50 flex items-center justify-between text-zinc-500">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center">
+                                            <span className="font-bold text-zinc-600">{index + 1}</span>
+                                        </div>
+                                        <span className="font-bold">Machine {index + 1} Available</span>
+                                    </div>
+                                    <div className="badge badge-ghost text-xs">OPEN</div>
+                                </div>
+                                )
+                            }
+                        })}
                     </div>
-                )}
+                </div>
             </div>
 
             {(myActiveSession || activeGames.length > 0 && user?.isAdmin) && (
@@ -325,7 +363,7 @@ export default function Queue({ user }) {
 
             {/* ACTION BUTTONS  */}
 
-            {user?.branchId && (user.status !== UserStatus.WAITING || user.branchId == viewBranch) && (
+            {user?.branchId && (user.status === UserStatus.OFFLINE || user.branchId == viewBranch) && (
 
                 <div className="flex flex-col gap-3">
                     <h3 className="text-xl font-bold text-zinc-300">Join Queue</h3>
@@ -399,7 +437,7 @@ export default function Queue({ user }) {
                                     <input
                                         type="text"
                                         placeholder="Guest Name..."
-                                        className="input input-bordered input-sm w-full bg-black/40 text-white"
+                                        className="input input-bordered input-sm w-full bg-black/40 text-white p-3"
                                         value={guestName}
                                         onChange={(e) => setGuestName(e.target.value)}
                                     />
