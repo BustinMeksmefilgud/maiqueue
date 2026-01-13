@@ -95,11 +95,11 @@ export default function Queue({ user }) {
         }
     };
 
-    const onGameStart = async () => {
+    const onGameStart = async (queue) => {
         if (!upcomingQueue[0]) return;
         try {
             setLoading(true);
-            await startGame(upcomingQueue[0].id);
+            await startGame(queue.id, queue.playerIds);
         } catch (e) {
             alert("Error starting game: " + e);
         } finally {
@@ -119,10 +119,8 @@ export default function Queue({ user }) {
                     console.log('Time left', diffInMinutes)
                     // If game has been running for > 20 mins, auto-finish it
                     if (diffInMinutes >= 20) {
-                        if (game.playerIds.includes(user.uid)) {
-                            console.log(`My game timed out. Auto-ending session ${game.id}.`);
-                            finishGame(game.id, game.playerIds);
-                        }
+                        console.log(`My game timed out. Auto-ending session ${game.id}.`);
+                        finishGame(game.id, game.playerIds);
                     }
                 }
             });
@@ -187,7 +185,7 @@ export default function Queue({ user }) {
                 <div className="mb-6">
                     <div className="flex justify-between items-end mb-2">
                         <h2 className="text-sm font-bold text-zinc-400 uppercase tracking-widest">Now Playing</h2>
-                        <span className="text-xs text-zinc-500">
+                        <span className="text-xs text-zinc-400">
                             {/* Use the state variable here */}
                             {activeGames.length} / {machineCapacity} Machines Active
                         </span>
@@ -200,43 +198,43 @@ export default function Queue({ user }) {
                             const game = activeGames[index];
                             if (game) {
                                 return (
-                                   <div key={game.id} className="bg-gradient-to-r from-emerald-900 to-teal-900 p-5 rounded-2xl shadow-lg border border-emerald-700/50 relative overflow-hidden">
-                                    <div className="absolute top-0 right-0 w-20 h-20 bg-white/10 blur-3xl rounded-full pointer-events-none"></div>
-                                    <div className="flex justify-between items-center z-10 relative">
-                                        <div>
-                                            <h3 className="text-2xl font-black text-white tracking-tight">
-                                                {game.playerNames.join(" & ")}
-                                            </h3>
-                                            <div className="flex gap-2 mt-1">
-                                                <span className="badge badge-sm bg-black/30 border-none text-white/70">
-                                                    {game.type}
-                                                </span>
-                                                <span className="text-xs text-emerald-200 animate-pulse">
-                                                    • Cab {index + 1} Busy
-                                                </span>
+                                    <div key={game.id} className="bg-gradient-to-r from-emerald-900 to-teal-900 p-5 rounded-2xl shadow-lg border border-emerald-700/50 relative overflow-hidden">
+                                        <div className="absolute top-0 right-0 w-20 h-20 bg-white/10 blur-3xl rounded-full pointer-events-none"></div>
+                                        <div className="flex justify-between items-center z-10 relative">
+                                            <div>
+                                                <h3 className="text-2xl font-black text-white tracking-tight">
+                                                    {game.playerNames.join(" & ")}
+                                                </h3>
+                                                <div className="flex gap-2 mt-1">
+                                                    <span className="badge badge-sm bg-black/30 border-none text-white/70">
+                                                        {game.type}
+                                                    </span>
+                                                    <span className="text-xs text-emerald-200 animate-pulse">
+                                                        • Cab {index + 1} Busy
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div className="text-right bg-black/20 p-2 rounded-lg border border-white/5 backdrop-blur-sm">
+                                                {game.startedAt ? (
+                                                    <GameTimer startTime={game.startedAt} />
+                                                ) : (
+                                                    <span className="loading loading-dots loading-xs text-white"></span>
+                                                )}
                                             </div>
                                         </div>
-                                        <div className="text-right bg-black/20 p-2 rounded-lg border border-white/5 backdrop-blur-sm">
-                                            {game.startedAt ? (
-                                                <GameTimer startTime={game.startedAt} />
-                                            ) : (
-                                                <span className="loading loading-dots loading-xs text-white"></span>
-                                            )}
-                                        </div>
                                     </div>
-                                </div>
                                 )
                             } else {
                                 return (
-                                  <div key={`empty-${index}`} className="p-5 rounded-2xl bg-black/20 border-2 border-dashed border-zinc-700/50 flex items-center justify-between text-zinc-500">
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center">
-                                            <span className="font-bold text-zinc-600">{index + 1}</span>
+                                    <div key={`empty-${index}`} className="p-5 rounded-2xl bg-black/20 border-2 border-dashed border-zinc-700/50 flex items-center justify-between text-zinc-500">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center">
+                                                <span className="font-bold text-teal-300">{index + 1}</span>
+                                            </div>
+                                            <span className="font-bold text-cyan-300">Machine {index + 1} Available</span>
                                         </div>
-                                        <span className="font-bold">Machine {index + 1} Available</span>
+                                        <div className="badge badge-ghost text-xs">OPEN</div>
                                     </div>
-                                    <div className="badge badge-ghost text-xs">OPEN</div>
-                                </div>
                                 )
                             }
                         })}
@@ -256,29 +254,43 @@ export default function Queue({ user }) {
                     >
                         🏁 Finish Game
                     </button>
-                    <p className="text-center text-xs text-zinc-500 mt-2">
+                    <p className="text-center text-xs text-cyan-500 mt-2">
                         Game will auto-end after 20 minutes.
                     </p>
                 </div>
             )}
 
             {!myActiveSession && isUserNext && (
-                <div className="mb-6 animate-bounce">
-                    <button
+                <>
+                    <div className="mb-6 animate-bounce">
+                        <button
+                            disabled={loading || isMachineBusy}
+                            className={`btn btn-lg w-full shadow-xl font-black uppercase tracking-wider ${isMachineBusy
+                                ? "btn-disabled bg-zinc-800 text-zinc-500 border-zinc-700"
+                                : "btn-warning border-teal-500 text-emerald-500 shadow-orange-900/20"
+                                }`}
+                            onClick={() => onGameStart(upcomingQueue[0])}
+                        >
+                            {isMachineBusy ? "Waiting for them to finish..." : "It's Your Turn! Start Game"}
+                        </button>
+                    </div>
+                    {!isMachineBusy && upcomingQueue.length > 1 && (
+                            <button
                         disabled={loading || isMachineBusy}
                         className={`btn btn-lg w-full shadow-xl font-black uppercase tracking-wider ${isMachineBusy
                             ? "btn-disabled bg-zinc-800 text-zinc-500 border-zinc-700"
-                            : "btn-warning border-teal-500 text-emerald-500 shadow-orange-900/20"
+                            : "btn-warning border-amber-500 text-amber-500 shadow-orange-900/20"
                             }`}
-                        onClick={onGameStart}
+                        onClick={() => onGameStart(upcomingQueue[1])}
                     >
-                        {isMachineBusy ? "Waiting for them to finish..." : "It's Your Turn! Start Game"}
+                        Or skip turn?
                     </button>
-                </div>
+                ) }
+                </>
             )}
 
             {/* --- SECTION 1: ACTIVE QUEUE --- */}
-            <div className="flex justify-between items-center mb-4">
+            <div className="flex justify-between items-center my-4">
                 <h1 className="text-2xl font-bold text-teal-100">Current Queue</h1>
                 <span className="badge badge-primary font-bold">Live</span>
             </div>
@@ -326,7 +338,7 @@ export default function Queue({ user }) {
                     ))}
 
                     {upcomingQueue.length === 0 && (
-                        <div className="text-center py-4 text-zinc-600 italic text-sm">
+                        <div className="text-center py-4 text-cyan-300 italic text-sm">
                             Queue is empty. Be the first!
                         </div>
                     )}

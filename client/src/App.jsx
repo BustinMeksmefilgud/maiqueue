@@ -9,6 +9,8 @@ import { User } from "./model/User";
 // Import Pages
 import Queue from './pages/Queue';
 import Auth from './pages/Auth';
+import Admin from './pages/Admin';
+import Pear from './pages/Pear';
 
 // Components
 import Navbar from './components/Navbar';
@@ -66,6 +68,8 @@ function App() {
                 
                 {/* Route 2: The Login Page (Pass user prop so it can redirect) */}
               <Route path="/login" element={<Auth user={user} />} />
+              <Route path="/admin" element={<Admin user={user} />} />
+              <Route path="/teto" element={<Pear />} />
               </Routes>
             </div>
           </div>

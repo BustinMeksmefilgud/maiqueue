@@ -62,22 +62,22 @@ export const subscribeToQueue = (callback, branchId) => {
 }
 
 export const getBranchCapacity = async (branchId) => {
-    try {
-        const docRef = doc(db, "branches", branchId);
-        const docSnap = await getDoc(docRef);
+  try {
+    const docRef = doc(db, "branches", branchId);
+    const docSnap = await getDoc(docRef);
 
-        if (docSnap.exists()) {
-            const data = docSnap.data();
-            // Return the count, or default to 1 if the field is missing
-            return data.cabinetCount || 1; 
-        } else {
-            console.warn(`Branch ${branchId} not found, defaulting to 1 machine.`);
-            return 1;
-        }
-    } catch (e) {
-        console.error("Error fetching branch capacity:", e);
-        return 1; // Safe default
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      // Return the count, or default to 1 if the field is missing
+      return data.cabinetCount || 1;
+    } else {
+      console.warn(`Branch ${branchId} not found, defaulting to 1 machine.`);
+      return 1;
     }
+  } catch (e) {
+    console.error("Error fetching branch capacity:", e);
+    return 1; // Safe default
+  }
 };
 
 export const addGuestToWaitingList = async (guestName, branch, uid) => {
@@ -149,7 +149,7 @@ export const removeGuestFromList = async (guest) => {
 export const joinQueue = async (userId, branchId, mode, cabCount = 1) => {
   try {
     let candidateSessionId = null;
-    let isMachineFree = true
+    let isMachineFree = false
 
     const qActive = query(
       collection(db, "queue"), // or "queue_sessions" depending on your collection name
@@ -158,11 +158,11 @@ export const joinQueue = async (userId, branchId, mode, cabCount = 1) => {
     );
     const activeSnap = await getDocs(qActive);
     const busyCabsCount = activeSnap.size;
-    
+    console.log("Busy cabs: ", busyCabsCount)
     if (busyCabsCount < cabCount) {
-        isMachineFree = true;
+      isMachineFree = true;
     }
-
+    console.log("Machine", isMachineFree)
     if (mode === QueueType.SYNC) {
       const q = query(
         collection(db, "queue"),
@@ -213,9 +213,9 @@ export const joinQueue = async (userId, branchId, mode, cabCount = 1) => {
           players: arrayUnion(userId),
           playerNames: arrayUnion(myUsername),
           playerCount: increment(1),
-          ...(isMachineFree && { 
-              status: QueueStatus.PLAYING, 
-              startedAt: serverTimestamp() 
+          ...(isMachineFree && {
+            status: QueueStatus.PLAYING,
+            startedAt: serverTimestamp()
           })
         });
 
@@ -408,13 +408,26 @@ export const pairHostWithGuest = async (hostUid, branchId, guestName) => {
   }
 };
 
-export const startGame = async (queueId) => {
+export const startGame = async (queueId, playerIds) => {
+  const batch = writeBatch(db);
   const sessionRef = doc(db, "queue", queueId);
 
-  await updateDoc(sessionRef, {
+  batch.update(sessionRef, {
     status: QueueStatus.PLAYING,
     startedAt: serverTimestamp()
   });
+
+
+
+  playerIds.forEach(uid => {
+    const userRef = doc(db, "users", uid);
+    batch.update(userRef, {
+      status: UserStatus.PLAYING,
+    });
+  });
+
+
+  await batch.commit();
 };
 
 export const finishGame = async (queueId, playerIds) => {
@@ -429,7 +442,7 @@ export const finishGame = async (queueId, playerIds) => {
   playerIds.forEach(uid => {
     const userRef = doc(db, "users", uid);
     batch.update(userRef, {
-      status: UserStatus.WAITING, // or UserStatus.ONLINE
+      status: UserStatus.WAITING,
       currentQueueId: null
     });
   });
