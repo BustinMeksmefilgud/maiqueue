@@ -152,17 +152,29 @@ export const joinQueue = async (userId, branchId, mode, cabCount = 1) => {
     let isMachineFree = false
 
     const qActive = query(
-      collection(db, "queue"), // or "queue_sessions" depending on your collection name
+      collection(db, "queue"),
       where("branchId", "==", branchId),
       where("status", "==", QueueStatus.PLAYING),
     );
     const activeSnap = await getDocs(qActive);
     const busyCabsCount = activeSnap.size;
-    console.log("Busy cabs: ", busyCabsCount)
     if (busyCabsCount < cabCount) {
       isMachineFree = true;
     }
-    console.log("Machine", isMachineFree)
+
+    const qLineCheck = query(
+      collection(db, "queue"),
+      where("branchId", "==", branchId),
+      where("status", "==", QueueStatus.QUEUED),
+      limit(1) 
+    );
+    const lineSnap = await getDocs(qLineCheck);
+    
+    // Is the line empty?
+    const isLineEmpty = lineSnap.empty;
+
+    console.log("Machine", isMachineFree, "Queue Empty", isLineEmpty)
+
     if (mode === QueueType.SYNC) {
       const q = query(
         collection(db, "queue"),
@@ -209,18 +221,21 @@ export const joinQueue = async (userId, branchId, mode, cabCount = 1) => {
       }
 
       if (sessionRefToJoin) {
+
+        const shouldStart = isMachineFree && isLineEmpty
+
         transaction.update(sessionRefToJoin, {
           players: arrayUnion(userId),
           playerNames: arrayUnion(myUsername),
           playerCount: increment(1),
-          ...(isMachineFree && {
+          ...(shouldStart && {
             status: QueueStatus.PLAYING,
             startedAt: serverTimestamp()
           })
         });
 
         transaction.update(userRef, {
-          status: isMachineFree ? UserStatus.PLAYING : UserStatus.IN_QUEUE,
+          status: shouldStart ? UserStatus.PLAYING : UserStatus.IN_QUEUE,
           currentQueueId: sessionRefToJoin.id
         });
 
@@ -228,7 +243,7 @@ export const joinQueue = async (userId, branchId, mode, cabCount = 1) => {
       } else {
         const newSessionRef = doc(collection(db, "queue"));
 
-        const shouldStartNow = isMachineFree && mode === QueueType.SOLO;
+        const shouldStartNow = isMachineFree && isLineEmpty && mode === QueueType.SOLO;
 
         const initialStatus = shouldStartNow ? QueueStatus.PLAYING : QueueStatus.QUEUED;
         const initialStartedAt = shouldStartNow ? serverTimestamp() : null;
@@ -461,3 +476,155 @@ export const switchBranch = async (userId, newBranch) => {
     throw error;
   }
 }
+
+export const seedMockQueue = async (branchId, totalQueuesToCreate = 5) => {
+  try {
+    console.log(`Starting seed for ${totalQueuesToCreate} queue items...`);
+
+    for (let i = 0; i < totalQueuesToCreate; i++) {
+      // REQUIREMENT: First 3 are always SYNC (6 people total). The rest are random.
+      let type = QueueType.SOLO;
+      if (i < 3) {
+        type = QueueType.SYNC;
+      } else {
+        // 70% chance of Sync, 30% chance of Solo for remaining items
+        type = Math.random() > 0.3 ? QueueType.SYNC : QueueType.SOLO;
+      }
+
+      // REQUIREMENT: Random Guest appearance
+      // 30% chance the second player in a Sync game is a Guest
+      const useGuestForP2 = Math.random() < 0.3;
+
+      // 1. Create Mock Users
+      const players = [];
+      const playerNames = [];
+
+      // Helper to generate a mock user doc
+      const createMockUser = async (isGuest, suffix) => {
+        const userRef = doc(collection(db, "users"));
+        const name = isGuest ? `Guest_${suffix}` : `MockUser_${suffix}`;
+        
+        await setDoc(userRef, {
+          uid: userRef.id,
+          username: name,
+          isGuest: isGuest,
+          status: UserStatus.IN_QUEUE, // They start directly in queue
+          branchId: branchId,
+          currentQueueId: null, // Will update momentarily
+          createdAt: serverTimestamp(),
+          isMock: true // Tag for easier cleanup later
+        });
+        
+        return { id: userRef.id, name: name };
+      };
+
+      // Create Player 1 (Always a regular user for this test)
+      const p1 = await createMockUser(false, `${i}A_${Math.floor(Math.random() * 1000)}`);
+      players.push(p1.id);
+      playerNames.push(p1.name);
+
+      // Create Player 2 (Only if Sync)
+      if (type === QueueType.SYNC) {
+        const p2 = await createMockUser(useGuestForP2, `${i}B_${Math.floor(Math.random() * 1000)}`);
+        players.push(p2.id);
+        playerNames.push(p2.name);
+      }
+
+      // 2. Create the Queue Item
+      const queueRef = doc(collection(db, "queue"));
+      await setDoc(queueRef, {
+        sessionId: queueRef.id,
+        branchId: branchId,
+        type: type,
+        status: QueueStatus.QUEUED,
+        players: players,
+        playerNames: playerNames,
+        playerCount: players.length,
+        createdAt: serverTimestamp(),
+        startedAt: null,
+        endedAt: null,
+        isMock: true
+      });
+
+      // 3. Link Users to Queue
+      for (const uid of players) {
+        await updateDoc(doc(db, "users", uid), {
+          currentQueueId: queueRef.id
+        });
+      }
+    }
+    
+    console.log("Mock queue seeding complete!");
+    alert(`Successfully added ${totalQueuesToCreate} mock groups to the queue.`);
+
+  } catch (e) {
+    console.error("Error seeding mock data:", e);
+    alert("Failed to seed data. Check console.");
+  }
+};
+
+export const seedWaitingList = async (branchId) => {
+    const BATCH_SIZE = 10;
+    const batch = writeBatch(db);
+    
+    // 1. Define the specific archetypes you asked for
+    const archetypes = [
+        { name: "Pro_Casual_Mock", rank: 15000, style: "Casual" },          // High Rank, Chill Style
+        { name: "Spammer_Mid_Mock", rank: 12000, style: "14k Spammer" },     // Your specific example
+        { name: "Newbie_Dave_Mock", rank: 100, style: "Casual" },            // Total beginner
+        { name: "Grinder_X_Mock", rank: 8500, style: "Chiho Grinder" },      // Mid-tier grinder
+        { name: "Lone_Wolf_Mock", rank: 14500, style: "Lone Wolf" }          // High rank, anti-social
+    ];
+
+    const styles = ["Casual", "Chiho Grinder", "14k Spammer", "Solo Boring", "Lone Wolf"];
+
+    try {
+        console.log("Seeding waiting list...");
+
+        // 2. Add the specific archetypes first
+        archetypes.forEach((arch) => {
+            const userRef = doc(collection(db, "users"));
+            batch.set(userRef, {
+                uid: userRef.id,
+                username: arch.name,
+                rank: arch.rank,
+                playStyle: arch.style,
+                status: UserStatus.WAITING, // Crucial for Find Partner
+                branchId: branchId,
+                isMock: true,               // For cleanup
+                createdAt: serverTimestamp()
+            });
+        });
+
+        // 3. Fill the rest with Random Data to reach BATCH_SIZE
+        const remaining = BATCH_SIZE - archetypes.length;
+        
+        for (let i = 0; i < remaining; i++) {
+            const userRef = doc(collection(db, "users"));
+            
+            // Random Rank between 500 and 14000
+            const randomRank = Math.floor(Math.random() * 13500) + 500;
+            // Random Style
+            const randomStyle = styles[Math.floor(Math.random() * styles.length)];
+
+            batch.set(userRef, {
+                uid: userRef.id,
+                username: `Random_User_${i+1}`,
+                rank: randomRank,
+                playStyle: randomStyle,
+                status: UserStatus.WAITING,
+                branchId: branchId,
+                isMock: true,
+                createdAt: serverTimestamp()
+            });
+        }
+
+        await batch.commit();
+        console.log("Waiting list seeded successfully!");
+        alert(`Added ${BATCH_SIZE} mock users to the ${branchId} waiting list.`);
+
+    } catch (e) {
+        console.error("Error seeding waiting list:", e);
+        alert("Failed to seed waiting list.");
+    }
+};

@@ -10,7 +10,9 @@ import goku from '../assets/you-fucked.gif'
 import { useEffect, useState } from "react";
 import { collection, onSnapshot, getDocs, doc, updateDoc, deleteDoc } from "firebase/firestore";
 import { db } from "../firebase";
-import { UserStatus } from "../model/Enums";
+import { UserStatus, BranchCode } from "../model/Enums";
+import { leaveWaitingList, seedMockQueue, seedWaitingList } from '../service/QueueService';
+import { seedTheething, deleteTheeThing } from '../service/AiService';
 
 export default function Admin({ user }) {
     const [users, setUsers] = useState([]);
@@ -32,36 +34,36 @@ export default function Admin({ user }) {
         "Solo Boring": UserPlusIcon
     };
 
-   useEffect(() => {
-    let unsubscribe = () => {};
+    useEffect(() => {
+        let unsubscribe = () => { };
 
-    if (user?.isAdmin) {
-        setLoading(true);
-        // 2. Setup the Listener
-        const usersRef = collection(db, "users");
-        
-        unsubscribe = onSnapshot(usersRef, (snapshot) => {
-            const userList = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
-            }));
-            
-            userList.sort((a, b) => {
-                if (a.status === 'PLAYING' && b.status !== 'PLAYING') return -1;
-                if (a.status !== 'PLAYING' && b.status === 'PLAYING') return 1;
-                return 0;
+        if (user?.isAdmin) {
+            setLoading(true);
+            // 2. Setup the Listener
+            const usersRef = collection(db, "users");
+
+            unsubscribe = onSnapshot(usersRef, (snapshot) => {
+                const userList = snapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }));
+
+                userList.sort((a, b) => {
+                    if (a.status === 'PLAYING' && b.status !== 'PLAYING') return -1;
+                    if (a.status !== 'PLAYING' && b.status === 'PLAYING') return 1;
+                    return 0;
+                });
+                setUsers(userList);
+                setLoading(false);
+            }, (error) => {
+                console.error("Error fetching users:", error);
+                setLoading(false);
             });
-            setUsers(userList);
-            setLoading(false);
-        }, (error) => {
-            console.error("Error fetching users:", error);
-            setLoading(false);
-        });
-    }
+        }
 
-    // 3. Cleanup: Stop listening when admin leaves the page
-    return () => unsubscribe();
-}, [user]);
+        // 3. Cleanup: Stop listening when admin leaves the page
+        return () => unsubscribe();
+    }, [user]);
     const getRankColor = (rating) => {
         // 15000+ (Rainbow / Prismatic)
         if (rating >= 15000) return "bg-gradient-to-r from-teal-200 via-yellow-200 to-pink-300 text-purple-900 border-purple-300";
@@ -98,16 +100,16 @@ export default function Admin({ user }) {
     };
 
     const handleDeleteUser = async (targetUserId) => {
-    if (!window.confirm("Are you sure you want to PERMANENTLY delete this user?")) return;
+        if (!window.confirm("Are you sure you want to PERMANENTLY delete this user?")) return;
 
-    try {
-        await deleteDoc(doc(db, "users", targetUserId));
-        setUsers(users.filter(u => u.id !== targetUserId));
+        try {
+            await deleteDoc(doc(db, "users", targetUserId));
+            setUsers(users.filter(u => u.id !== targetUserId));
 
-    } catch (e) {
-        alert("Error deleting user: " + e);
+        } catch (e) {
+            alert("Error deleting user: " + e);
+        }
     }
-}
 
     // 3. Filter Logic for Search
     const filteredUsers = users.filter(u =>
@@ -145,7 +147,30 @@ export default function Admin({ user }) {
                     onChange={(e) => setSearchTerm(e.target.value)}
                 />
             </div>
-
+            <button
+                onClick={() => seedTheething()}
+                className="btn btn-xs btn-outline btn-error"
+            >
+                Add Mock Queue Data
+            </button>
+             <button
+                onClick={() => seedWaitingList(BranchCode.SISA)}
+                className="btn btn-xs btn-outline btn-error"
+            >
+                Add people to waitinglist
+            </button>
+            <button
+                onClick={() => seedMockQueue(BranchCode.SISA)}
+                className="btn btn-xs btn-outline btn-error"
+            >
+                Add people to queue
+            </button>
+            <button
+                onClick={() => deleteTheeThing()}
+                className="btn btn-xs btn-outline btn-error"
+            >
+                Delete Mock Queue Data
+            </button>
             <div className="overflow-x-auto bg-zinc-900/50 rounded-xl border border-white/5 shadow-xl">
                 <table className="table w-full">
                     {/* Table Head */}
@@ -202,6 +227,12 @@ export default function Admin({ user }) {
                                             className="btn btn-xs btn-outline btn-error"
                                         >
                                             <TrashIcon className='w-5 h-5 text-red-700' />
+                                        </button>
+                                         <button
+                                            onClick={() => leaveWaitingList(u.id)}
+                                            className="btn btn-xs btn-outline btn-error"
+                                        >
+                                            <UserIcon className='w-5 h-5 text-yellow-500' />
                                         </button>
                                     </td>
                                 </tr>

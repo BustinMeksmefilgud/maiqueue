@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react';
 import BranchSwitcher from "../components/BranchSwitcher";
-import GameTimer from "../components/GameTimer"
+import GameTimer from "../components/GameTimer";
+import PartnerFinder from '../components/PartnerFinder';
 import {
     addToWaitingList,
     addGuestToWaitingList,
@@ -15,7 +16,8 @@ import {
     finishGame,
     addGuestSolo,
     pairHostWithGuest
-} from '../service/QueueService';
+} from '../service/QueueService.jsx';
+import { getEstimatedWaitTime } from '../service/AiService.jsx';
 import { UserStatus, QueueType, QueueStatus } from "../model/Enums.jsx";
 
 export default function Queue({ user }) {
@@ -29,6 +31,10 @@ export default function Queue({ user }) {
     const [waitingList, setWaitingList] = useState([])
     const [guestName, setGuestName] = useState("")
     const [machineCapacity, setMachineCapacity] = useState(1);
+
+    const [etLoading, setEtLoading] = useState(false)
+    const [aiWaitTime, setAiWaitTime] = useState(null);
+    const [aiMethod, setAiMethod] = useState("");
 
     const activeGames = queueData.filter(q => q.status === QueueStatus.PLAYING);
     const upcomingQueue = queueData.filter(q => q.status === QueueStatus.QUEUED);
@@ -162,8 +168,31 @@ export default function Queue({ user }) {
         fetchCapacity();
     }, [viewBranch]);
 
+    useEffect(() => {
+        const fetchWaitTime = async () => {
+            setEtLoading(true)
+            if (viewBranch) {
+                // Pass the viewBranch (e.g., "sisa")
+                const data = await getEstimatedWaitTime(viewBranch);
+                if (data) {
+                    setAiWaitTime(data.estimated_minutes);
+                    setAiMethod(data.method);
+                }
+                console.log("Method: ", aiMethod)
+            }
+            setEtLoading(false)
+        };
+
+        // Call it immediately, and whenever queueData updates
+        fetchWaitTime();
+
+    }, [queueData, viewBranch]);
+
     return (
         <div className="p-6 w-full max-w-md mx-auto">
+            <div className="flex justify-between items-center mb-4">
+                Dislcaimer: Early Stages, might break. Estimated Wait Time and Partner Finder aren't active
+            </div>
             {user?.isGuest && (
                 <div className="flex justify-between items-center mb-4">
                     <h1 className="text-2xl font-bold text-teal-100">Guest Mode</h1>
@@ -275,24 +304,36 @@ export default function Queue({ user }) {
                         </button>
                     </div>
                     {!isMachineBusy && upcomingQueue.length > 1 && (
-                            <button
-                        disabled={loading || isMachineBusy}
-                        className={`btn btn-lg w-full shadow-xl font-black uppercase tracking-wider ${isMachineBusy
-                            ? "btn-disabled bg-zinc-800 text-zinc-500 border-zinc-700"
-                            : "btn-warning border-amber-500 text-amber-500 shadow-orange-900/20"
-                            }`}
-                        onClick={() => onGameStart(upcomingQueue[1])}
-                    >
-                        Or skip turn?
-                    </button>
-                ) }
+                        <button
+                            disabled={loading || isMachineBusy}
+                            className={`btn btn-lg w-full shadow-xl font-black uppercase tracking-wider ${isMachineBusy
+                                ? "btn-disabled bg-zinc-800 text-zinc-500 border-zinc-700"
+                                : "btn-warning border-amber-500 text-amber-500 shadow-orange-900/20"
+                                }`}
+                            onClick={() => onGameStart(upcomingQueue[1])}
+                        >
+                            Or skip turn?
+                        </button>
+                    )}
                 </>
             )}
 
             {/* --- SECTION 1: ACTIVE QUEUE --- */}
             <div className="flex justify-between items-center my-4">
                 <h1 className="text-2xl font-bold text-teal-100">Current Queue</h1>
-                <span className="badge badge-primary font-bold">Live</span>
+                {aiWaitTime !== null && (
+                    <div
+                        className={`badge gap-1 mt-1 font-mono text-xs p-3 ${aiMethod.includes('ai') ? 'badge-primary text-blue-100' : 'badge-warning'
+                            }`}
+                        title={`Calculation Method: ${aiMethod}`}
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
+                        </svg>
+                        {/* Round up so users don't see "12.3 minutes" */}
+                        {Math.ceil(aiWaitTime)} min wait
+                    </div>
+                )}
             </div>
 
             <div className="mb-8">
@@ -372,6 +413,12 @@ export default function Queue({ user }) {
                     )}
                 </div>
             </div>
+{/* 
+            {user?.status === UserStatus.WAITING && (
+                <div className="mt-4">
+                    <PartnerFinder user={user} branchId={viewBranch} />
+                </div>
+            )} */}
 
             {/* ACTION BUTTONS  */}
 

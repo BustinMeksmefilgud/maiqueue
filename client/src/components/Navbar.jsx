@@ -49,19 +49,19 @@ export default function Navbar({ user, loading }) {
                 </span>
                 <button
                   onClick={handleLogout}
-                  className="btn btn-sm btn-error btn-outline text-white hover:bg-red-500/20"
+                  className="btn btn-sm btn-error btn-outline bg-black text-white hover:bg-red-500/20"
                 >
                   Logout
                 </button>
               </>
             ) : (
               <div className="flex items-center gap-2">
-                <span className="hidden sm:inline text-sm text-teal-200 mr-2">
+                <span className="hidden sm:inline text-sm  text-teal-200 mr-2">
                   Guest
                 </span>
                 <button
                   onClick={handleLogin}
-                  className="btn btn-sm btn-error btn-outline text-white hover:bg-red-500/20"
+                  className="btn btn-sm btn-error btn-outline bg-black text-white hover:bg-red-500/20"
                 >
                   Log in
                 </button>
