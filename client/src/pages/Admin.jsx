@@ -7,17 +7,18 @@ import {
     TrashIcon
 } from '@heroicons/react/24/solid';
 import goku from '../assets/you-fucked.gif'
+import BranchSwitcher from "../components/BranchSwitcher";
 import { useEffect, useState } from "react";
 import { collection, onSnapshot, getDocs, doc, updateDoc, deleteDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { UserStatus, BranchCode } from "../model/Enums";
-import { leaveWaitingList, seedMockQueue, seedWaitingList } from '../service/QueueService';
-import { seedTheething, deleteTheeThing } from '../service/AiService';
+import { leaveWaitingList, seedMockQueue, seedWaitingList, seedHistory, clearMockHistory, clearMockUsers } from '../service/QueueService';
 
 export default function Admin({ user }) {
     const [users, setUsers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState("");
+    const [viewBranch, setViewBranch] = useState(user?.branchId)
 
     const statusColors = {
         [UserStatus.PLAYING]: "bg-green-500",
@@ -99,6 +100,10 @@ export default function Admin({ user }) {
         return "bg-slate-200 text-slate-700 border-slate-400";
     };
 
+     const handleBranchChange = (newBranchCode) => {
+        setViewBranch(newBranchCode);
+    };
+
     const handleDeleteUser = async (targetUserId) => {
         if (!window.confirm("Are you sure you want to PERMANENTLY delete this user?")) return;
 
@@ -132,7 +137,7 @@ export default function Admin({ user }) {
 
     return (
         <div className="p-6 max-w-6xl mx-auto min-h-screen">
-            <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+            <div className="flex flex-col justify-between items-center mb-6 gap-4">
                 <div>
                     <h1 className="text-3xl font-bold text-teal-100">User Database</h1>
                     <p className="text-teal-500 text-sm">Total Users: {users.length}</p>
@@ -146,30 +151,38 @@ export default function Admin({ user }) {
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                 />
+                <BranchSwitcher currentBranch={viewBranch} onBranchChange={handleBranchChange} />
             </div>
+            
             <button
-                onClick={() => seedTheething()}
+                onClick={() => seedHistory()}
                 className="btn btn-xs btn-outline btn-error"
             >
                 Add Mock Queue Data
             </button>
              <button
-                onClick={() => seedWaitingList(BranchCode.SISA)}
+                onClick={() => seedWaitingList(viewBranch)}
                 className="btn btn-xs btn-outline btn-error"
             >
                 Add people to waitinglist
             </button>
             <button
-                onClick={() => seedMockQueue(BranchCode.SISA)}
+                onClick={() => seedMockQueue(viewBranch)}
                 className="btn btn-xs btn-outline btn-error"
             >
                 Add people to queue
             </button>
             <button
-                onClick={() => deleteTheeThing()}
+                onClick={() => clearMockHistory()}
                 className="btn btn-xs btn-outline btn-error"
             >
                 Delete Mock Queue Data
+            </button>
+             <button
+                onClick={() => clearMockUsers()}
+                className="btn btn-xs btn-outline btn-error"
+            >
+                Delete Mock User
             </button>
             <div className="overflow-x-auto bg-zinc-900/50 rounded-xl border border-white/5 shadow-xl">
                 <table className="table w-full">

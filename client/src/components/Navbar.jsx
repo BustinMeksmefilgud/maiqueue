@@ -20,11 +20,10 @@ export default function Navbar({ user, loading }) {
   };
 
   return (
-    // DaisyUI Navbar component with a transparent background
-    <div className="navbar bg-black/20 text-zinc-100 backdrop-blur-sm sticky top-0 z-50">
+    <div className="navbar bg-black/20 justify-between text-zinc-100 backdrop-blur-sm sticky top-0 z-50">
 
       {/* Left Side: Logo/Brand */}
-      <div className="flex-1">
+      <div className="flex">
         <Link to="/" className="btn btn-ghost text-xl font-bold text-teal-100">
           MaiQueue
         </Link>
@@ -44,8 +43,11 @@ export default function Navbar({ user, loading }) {
           <>
             {user ? (
               <>
-                <span className="hidden sm:inline text-sm text-teal-200 mr-2 font-medium">
-                  {user.username}
+                <span className="text-sm text-teal-200 mr-2 font-medium">
+                  {user.username.length > 8
+                                ? `${user.username.slice(0, 8)}...`
+                                : user.username
+                            }
                 </span>
                 <button
                   onClick={handleLogout}

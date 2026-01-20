@@ -60,13 +60,13 @@ export default function PartnerFinder({ user, branchId }) {
             {/* 2. THE MODAL */}
             {isOpen && (
                 <div className="modal modal-open">
-                    <div className="modal-box relative border border-slate-700 bg-red-900">
+                    <div className="modal-box relative border border-slate-700 bg-emerald-900">
                         <button 
                             className="btn btn-sm btn-circle absolute right-2 top-2"
                             onClick={() => setIsOpen(false)}
                         >✕</button>
                         
-                        <h3 className="text-lg font-bold text-secondary mb-4 flex items-center gap-2">
+                        <h3 className="text-lg font-bold text-teal-300 mb-4 flex items-center gap-2">
                                 Partner Finder
                         </h3>
 

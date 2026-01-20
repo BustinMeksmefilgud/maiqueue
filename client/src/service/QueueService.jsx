@@ -17,7 +17,8 @@ import {
   arrayUnion,
   increment,
   writeBatch,
-  limit
+  limit,
+  Timestamp
 } from "firebase/firestore";
 import { User } from "../model/User";
 import { QueueItem } from "../model/Queue";
@@ -79,6 +80,19 @@ export const getBranchCapacity = async (branchId) => {
     return 1; // Safe default
   }
 };
+
+export const getMyGuests = (callback, userId) => {
+  const q = query(
+        collection(db, "users"), 
+        where("addedBy", "==", userId)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+        const guests = snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() }));
+        callback(guests)
+    });
+  return unsubscribe
+}
 
 export const addGuestToWaitingList = async (guestName, branch, uid) => {
   const GUEST_LIMIT = 2;
@@ -285,7 +299,6 @@ export const leaveQueue = async (userId, queueId) => {
   try {
     await runTransaction(db, async (transaction) => {
       const sessionRef = doc(db, "queue", queueId);
-      const userRef = doc(db, "users", userId);
 
       const sessionSnap = await transaction.get(sessionRef);
       if (!sessionSnap.exists()) throw "Queue session not found!";
@@ -336,6 +349,43 @@ export const leaveQueue = async (userId, queueId) => {
         });
       });
     });
+
+    console.log("Left queue successfully");
+
+  } catch (e) {
+    console.error("Error leaving queue:", e);
+    throw e;
+  }
+};
+
+export const removeQueue = async (queueId) => {
+  try {
+    await runTransaction(db, async (transaction) => {
+      const sessionRef = doc(db, "queue", queueId);
+
+      const sessionSnap = await transaction.get(sessionRef);
+      if (!sessionSnap.exists()) throw "Queue session not found!";
+
+      const sessionData = sessionSnap.data();
+
+      const players = sessionData.playerIds || []
+
+
+      for (const uid of players) {
+        const userRef = doc(db, "users", uid)
+        const userSnap = await transaction.get(userRef); 
+        
+        if (userSnap.exists()) {
+           transaction.update(userRef, {
+             status: UserStatus.WAITING, 
+             currentQueueId: null       
+           });
+        }
+      }
+
+      transaction.delete(sessionRef);
+    });
+    
 
     console.log("Left queue successfully");
 
@@ -476,6 +526,156 @@ export const switchBranch = async (userId, newBranch) => {
     throw error;
   }
 }
+
+export const seedHistory = async () => {
+    try {
+        console.log("Starting Seed History...");
+
+        // 1. FETCH REAL USERS
+        const usersSnap = await getDocs(collection(db, "users"));
+        const userList = usersSnap.docs.map(d => d.id);
+
+        if (userList.length < 2) {
+            alert("Not enough users! Create at least 2 users first.");
+            return;
+        }
+
+        const BATCH_LIMIT = 500; // Firestore limit
+        let batch = writeBatch(db);
+        let opCount = 0;
+        let totalCreated = 0;
+
+        // 2. GENERATE 50 MOCK SESSIONS
+        for (let i = 0; i < 50; i++) {
+            // A. Pick Random Branch & Type
+            const branch = Math.random() < 0.5 ? 'sisa' : 'jmall';
+            const gameType = Math.random() < 0.5 ? 'solo' : 'sync'; // Assuming your enums are uppercase
+
+            // B. Pick Random Players
+            let players = [];
+            if (gameType === 'solo') {
+                const r = Math.floor(Math.random() * userList.length);
+                players.push(userList[r]);
+            } else {
+                // Pick 2 distinct users
+                // fast shuffle trick
+                const shuffled = userList.sort(() => 0.5 - Math.random());
+                players = shuffled.slice(0, 2);
+            }
+
+            // C. Generate Realistic Timestamps (Last 7 Days)
+            const daysAgo = Math.floor(Math.random() * 7);
+            const hoursAgo = Math.floor(Math.random() * 24);
+            
+            // Current time minus random days/hours
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - daysAgo);
+            startDate.setHours(startDate.getHours() - hoursAgo);
+
+            // D. Generate Realistic Duration
+            let durationMins = 0;
+            if (gameType === 'solo') {
+                // 10.0 to 14.0 mins
+                durationMins = 10 + Math.random() * 4;
+            } else {
+                // 15.0 to 22.0 mins
+                durationMins = 15 + Math.random() * 7;
+            }
+            // Add randomness (-1 to +3)
+            durationMins += (Math.random() * 4) - 1;
+
+            // Calculate End Time (Start + Duration)
+            const endDate = new Date(startDate.getTime() + durationMins * 60000);
+            
+            // Calculate Created At (Start - 5 mins)
+            const createdDate = new Date(startDate.getTime() - 5 * 60000);
+
+            // E. Create Document Data
+            const newRef = doc(collection(db, "queue")); // Auto-ID
+            
+            const docData = {
+                sessionId: newRef.id,
+                branchId: branch,
+                type: gameType,
+                status: 'completed', // or QueueStatus.COMPLETED
+                players: players,
+                playerCount: players.length,
+                // Convert JS Date to Firestore Timestamp
+                startedAt: Timestamp.fromDate(startDate),
+                endedAt: Timestamp.fromDate(endDate),
+                createdAt: Timestamp.fromDate(createdDate),
+                isMock: true
+            };
+
+            batch.set(newRef, docData);
+            opCount++;
+            totalCreated++;
+
+            // Commit batch if full
+            if (opCount >= BATCH_LIMIT) {
+                await batch.commit();
+                batch = writeBatch(db); // Reset
+                opCount = 0;
+            }
+        }
+
+        // Commit remaining
+        if (opCount > 0) {
+            await batch.commit();
+        }
+
+        console.log(`Successfully seeded ${totalCreated} mock history items!`);
+        alert(`Success! Created ${totalCreated} completed games.`);
+
+    } catch (e) {
+        console.error("Error seeding history:", e);
+        alert("Error seeding history: " + e.message);
+    }
+};
+
+export const clearMockHistory = async () => {
+    try {
+        console.log("Clearing Mock Data...");
+
+        // 1. Query for mock data
+        const q = query(collection(db, "queue"), where("isMock", "==", true));
+        const snapshot = await getDocs(q);
+
+        if (snapshot.empty) {
+            alert("No mock data found to clear.");
+            return;
+        }
+
+        const BATCH_LIMIT = 500;
+        let batch = writeBatch(db);
+        let opCount = 0;
+        let totalDeleted = 0;
+
+        // 2. Delete Loop
+        for (const document of snapshot.docs) {
+            batch.delete(document.ref);
+            opCount++;
+            totalDeleted++;
+
+            if (opCount >= BATCH_LIMIT) {
+                await batch.commit();
+                batch = writeBatch(db);
+                opCount = 0;
+            }
+        }
+
+        if (opCount > 0) {
+            await batch.commit();
+        }
+
+        console.log(`Deleted ${totalDeleted} mock records.`);
+        alert(`Cleared ${totalDeleted} mock records.`);
+
+    } catch (e) {
+        console.error("Error clearing mock data:", e);
+        alert("Error clearing data: " + e.message);
+    }
+};
 
 export const seedMockQueue = async (branchId, totalQueuesToCreate = 5) => {
   try {
@@ -626,5 +826,54 @@ export const seedWaitingList = async (branchId) => {
     } catch (e) {
         console.error("Error seeding waiting list:", e);
         alert("Failed to seed waiting list.");
+    }
+};
+
+/**
+ * CLEAR MOCK USERS (Frontend Version)
+ * Deletes all user profiles where isMock == true
+ */
+export const clearMockUsers = async () => {
+    try {
+        console.log("Clearing Mock Users...");
+
+        // 1. Query for mock users
+        const q = query(collection(db, "users"), where("isMock", "==", true));
+        const snapshot = await getDocs(q);
+
+        if (snapshot.empty) {
+            alert("No mock users found to clear.");
+            return;
+        }
+
+        const BATCH_LIMIT = 500;
+        let batch = writeBatch(db);
+        let opCount = 0;
+        let totalDeleted = 0;
+
+        // 2. Delete Loop
+        for (const document of snapshot.docs) {
+            batch.delete(document.ref);
+            opCount++;
+            totalDeleted++;
+
+            if (opCount >= BATCH_LIMIT) {
+                await batch.commit();
+                batch = writeBatch(db);
+                opCount = 0;
+            }
+        }
+
+        // Commit any remaining deletions
+        if (opCount > 0) {
+            await batch.commit();
+        }
+
+        console.log(`Deleted ${totalDeleted} mock users.`);
+        alert(`Successfully deleted ${totalDeleted} mock users.`);
+
+    } catch (e) {
+        console.error("Error clearing mock users:", e);
+        alert("Error clearing users: " + e.message);
     }
 };

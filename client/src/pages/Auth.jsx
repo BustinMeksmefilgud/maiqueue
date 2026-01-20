@@ -206,7 +206,7 @@ export default function Auth() {
                           <option value="Casual">Casual</option>
                           <option value="Chiho Grinder">Chiho Grinder</option>
                           <option value="14k Spammer">14k Spammer</option>
-                          <option value="Syncer">Lone Wolf</option>
+                          <option value="Solo">Lone Wolf</option>
                           <option value="Syncer">Solo Boring</option>
                         </select>
                       </div>

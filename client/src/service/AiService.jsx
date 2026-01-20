@@ -1,12 +1,11 @@
-const API_BASE_URL = "http://127.0.0.1:5000/api";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:5000/api";
 
-export const getEstimatedWaitTime = async (branchId) => {
+export const getEstimatedWaitTime = async (branchId, userId) => {
     try {
         const response = await fetch(`${API_BASE_URL}/predict-wait`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ branchId: branchId }),
-            signal: AbortSignal.timeout(3000)
+            body: JSON.stringify({ branchId: branchId, userId: userId }),
         });
 
         if (!response.ok) throw new Error("AI Service Failed");
@@ -30,7 +29,6 @@ export const findPartner = async (userId, branchId) => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userId, branchId }),
-            signal: AbortSignal.timeout(3000)
         });
         
         if (!response.ok) {
@@ -65,33 +63,3 @@ export const findPartner = async (userId, branchId) => {
         };
     }
 };
-
-export const seedTheething = async () => {
-    try {
-        const response = await fetch(`${API_BASE_URL}/seed-history`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-        });
-
-        if (!response.ok) throw new Error("AI Service Failed");
-
-        console.log(response)
-    } catch (e) {
-        console.error("AI Error:", error);
-    }
-}
-
-export const deleteTheeThing = async () => {
-    try {
-        const response = await fetch(`${API_BASE_URL}/clear-mock-data`, {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-        });
-
-        if (!response.ok) throw new Error("AI Service Failed");
-
-        console.log(response)
-    } catch (e) {
-        console.error("AI Error:", error);
-    }
-}

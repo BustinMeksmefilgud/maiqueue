@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useLocation, useNavigate, Link } from "react-router-dom";
 import BranchSwitcher from "../components/BranchSwitcher";
 import GameTimer from "../components/GameTimer";
 import PartnerFinder from '../components/PartnerFinder';
@@ -7,11 +8,13 @@ import {
     addGuestToWaitingList,
     subscribeToWaitingList,
     getBranchCapacity,
+    getMyGuests,
     subscribeToQueue,
     leaveWaitingList,
     removeGuestFromList,
     joinQueue,
     leaveQueue,
+    removeQueue,
     startGame,
     finishGame,
     addGuestSolo,
@@ -30,6 +33,7 @@ export default function Queue({ user }) {
     const [queueData, setQueueData] = useState([])
     const [waitingList, setWaitingList] = useState([])
     const [guestName, setGuestName] = useState("")
+    const [myGuests, setMyGuests] = useState([])
     const [machineCapacity, setMachineCapacity] = useState(1);
 
     const [etLoading, setEtLoading] = useState(false)
@@ -46,6 +50,7 @@ export default function Queue({ user }) {
     const myQueueItem = upcomingQueue.find(q => q.playerIds.includes(user?.uid));
 
     const isUserNext = !myActiveSession && upcomingQueue.length > 0 && upcomingQueue[0].playerIds.includes(user?.uid);
+
 
     const handleBranchChange = (newBranchCode) => {
         setViewBranch(newBranchCode);
@@ -139,6 +144,7 @@ export default function Queue({ user }) {
         if (!viewBranch) {
             setQueueData([]);
             setWaitingList([]);
+            setMyGuests([]);
             return;
         }
         const unsubWaiting = subscribeToWaitingList((newUsers) => {
@@ -151,12 +157,21 @@ export default function Queue({ user }) {
             setQueueData(newUsers);
         }, viewBranch);
 
+        let unsubGuests = () => { };
+
+        if (user?.uid) {
+            unsubGuests = getMyGuests((newGuests) => {
+                console.log("Adding guests", newGuests);
+                setMyGuests(newGuests);
+            }, user.uid); // <--- PASS USER ID HERE
+        }
         // 2. Cleanup: Stop listening when user leaves the page
         return () => {
             unsubQueue();
             unsubWaiting();
+            unsubGuests();
         };
-    }, [viewBranch]);
+    }, [viewBranch, user?.uid]);
 
     useEffect(() => {
         const fetchCapacity = async () => {
@@ -173,7 +188,7 @@ export default function Queue({ user }) {
             setEtLoading(true)
             if (viewBranch) {
                 // Pass the viewBranch (e.g., "sisa")
-                const data = await getEstimatedWaitTime(viewBranch);
+                const data = await getEstimatedWaitTime(viewBranch, user?.uid);
                 if (data) {
                     setAiWaitTime(data.estimated_minutes);
                     setAiMethod(data.method);
@@ -190,40 +205,45 @@ export default function Queue({ user }) {
 
     return (
         <div className="p-6 w-full max-w-md mx-auto">
-            <div className="flex justify-between items-center mb-4">
+            {/* <div className="flex justify-between items-center mb-4">
                 Dislcaimer: Early Stages, might break. Estimated Wait Time and Partner Finder aren't active
-            </div>
-            {user?.isGuest && (
-                <div className="flex justify-between items-center mb-4">
+            </div> */}
+            <div className="flex flex-col justify-between items-center mb-4">
+                {user?.isGuest && (
                     <h1 className="text-2xl font-bold text-teal-100">Guest Mode</h1>
-                </div>
-            )}
-            <div className="mb-4">
+                )}
+                {user?.isAdmin && (
+                    <>
+                        <h1 className="text-2xl font-bold text-teal-100">Admin Mode</h1>
+                        <div className="text-xs mt-2 mb-4 py-2">
+                            With great power and all that jazz, Be careful what you change
+                        </div>
+                        <Link to="/admin" className="text-s font-bold text-teal-100">
+                            Admin
+                        </Link>
+                    </>
+                )}
                 <BranchSwitcher currentBranch={viewBranch} onBranchChange={handleBranchChange} />
-            </div>
-            {user?.branchId && user.branchId !== viewBranch && user.status === UserStatus.WAITING && (
-                <div className="text-xs mt-2 mb-4 py-2">
-                    <span>
-                        You are waiting at <b>{user.branchId}</b>, but viewing <b>{viewBranch}</b>.
-                    </span>
-                </div>
-            )}
 
+                {user?.branchId && user.branchId !== viewBranch && user.status === UserStatus.WAITING && (
+                    <div className="text-xs mt-2 mb-4 py-2">
+                        <span>
+                            You are waiting at <b>{user.branchId}</b>, but viewing <b>{viewBranch}</b>.
+                        </span>
+                    </div>
+                )}
+            </div>
             <div className="mb-6">
-                <h2 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-2">Now Playing</h2>
                 <div className="mb-6">
                     <div className="flex justify-between items-end mb-2">
-                        <h2 className="text-sm font-bold text-zinc-400 uppercase tracking-widest">Now Playing</h2>
+                        <h2 className="text-sm font-bold text-teal-400 uppercase tracking-widest">Now Playing</h2>
                         <span className="text-xs text-zinc-400">
-                            {/* Use the state variable here */}
                             {activeGames.length} / {machineCapacity} Machines Active
                         </span>
                     </div>
 
                     <div className="grid gap-3">
-                        {/* 4. RENDER SLOTS (Use the state variable for length) */}
                         {Array.from({ length: machineCapacity }).map((_, index) => {
-                            // ... (Inner content remains exactly the same as previous step) ...
                             const game = activeGames[index];
                             if (game) {
                                 return (
@@ -232,7 +252,9 @@ export default function Queue({ user }) {
                                         <div className="flex justify-between items-center z-10 relative">
                                             <div>
                                                 <h3 className="text-2xl font-black text-white tracking-tight">
-                                                    {game.playerNames.join(" & ")}
+                                                    {game.playerNames.map(name =>
+                                                        name.length > 8 ? name.substring(0, 8) + "..." : name
+                                                    ).join(" & ")}
                                                 </h3>
                                                 <div className="flex gap-2 mt-1">
                                                     <span className="badge badge-sm bg-black/30 border-none text-white/70">
@@ -289,7 +311,7 @@ export default function Queue({ user }) {
                 </div>
             )}
 
-            {!myActiveSession && isUserNext && (
+            {upcomingQueue.length > 0 && !myActiveSession && (isUserNext || user?.isAdmin) && (
                 <>
                     <div className="mb-6 animate-bounce">
                         <button
@@ -321,18 +343,24 @@ export default function Queue({ user }) {
             {/* --- SECTION 1: ACTIVE QUEUE --- */}
             <div className="flex justify-between items-center my-4">
                 <h1 className="text-2xl font-bold text-teal-100">Current Queue</h1>
-                {aiWaitTime !== null && (
-                    <div
-                        className={`badge gap-1 mt-1 font-mono text-xs p-3 ${aiMethod.includes('ai') ? 'badge-primary text-blue-100' : 'badge-warning'
-                            }`}
-                        title={`Calculation Method: ${aiMethod}`}
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
-                        </svg>
-                        {/* Round up so users don't see "12.3 minutes" */}
-                        {Math.ceil(aiWaitTime)} min wait
-                    </div>
+                {queueData.length > 0 && (
+                    <>
+                        {!etLoading && aiWaitTime !== null ? (
+                            <div
+                                className={`badge gap-1 mt-1 font-mono text-xs p-3 ${aiMethod.includes('ai') ? 'badge-primary text-blue-100' : 'badge-warning'
+                                    }`}
+                                title={`Calculation Method: ${aiMethod}`}
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
+                                </svg>
+                                {/* Round up so users don't see "12.3 minutes" */}
+                                {Math.ceil(aiWaitTime)} min wait
+                            </div>
+                        ) : (
+                            <div clasName="badge gap-1 mt-1 font-mono text-xs p-3">Loading...</div>
+                        )}
+                    </>
                 )}
             </div>
 
@@ -343,40 +371,79 @@ export default function Queue({ user }) {
                 </div>
 
                 <div className="flex flex-col gap-2">
-                    {upcomingQueue.map((q, index) => (
-                        <div key={q.id} className="card bg-teal-900 border border-teal-100 p-4 flex-row items-center justify-between shadow-sm">
+                    {upcomingQueue.map((q, index) => {
+                        const myGuestInThisQueue = myGuests.find(g => q.playerIds.includes(g.uid));
+                        const isMyGuestNext = index === 0 && myGuestInThisQueue;
+                        return (
+                            <div key={q.id} className="card bg-teal-900 border border-teal-100 p-4 flex-row relative items-center justify-between shadow-sm">
 
-                            {/* Left: Info */}
-                            <div className="flex items-center gap-3">
-                                {/* Position Number */}
-                                <div className="font-mono text-zinc-500 text-sm w-4">#{index + 1}</div>
+                                {/* Left: Info */}
+                                <div className="flex items-center gap-3">
+                                    {/* Position Number */}
+                                    <div className="font-mono text-yellow-500 text-sm w-4">#{index + 1}</div>
 
-                                <div>
-                                    <h4 className="font-bold text-zinc-200 text-lg leading-tight">
-                                        {q.playerNames.join(" & ")}
-                                    </h4>
+                                    <div className="flex-col items-start">
+                                        <h4 className={`font-bold text-lg leading-tight text-left ${q.playerIds.includes(user?.uid) ? 'text-teal-500' : 'text-zinc-200'}`}>
+                                            {q.playerNames.join(" & ")}
+                                        </h4>
 
-                                    {/* Type Badge */}
-                                    <div className="mt-1">
-                                        {q.type === QueueType.SYNC ? (
-                                            <span className="badge badge-xs badge-secondary bg-purple-500/20 text-purple-200 border-none">
-                                                SYNC
-                                            </span>
-                                        ) : (
-                                            <span className="badge badge-xs badge-primary bg-blue-500/20 text-blue-200 border-none">
-                                                SOLO
-                                            </span>
-                                        )}
+                                        <div className="mt-1">
+                                            {q.type === QueueType.SYNC ? (
+                                                <span className="badge badge-xs badge-secondary bg-purple-500/20 text-purple-200 border-none">
+                                                    SYNC
+                                                </span>
+                                            ) : (
+                                                <span className="badge badge-xs badge-primary bg-blue-500/20 text-blue-200 border-none">
+                                                    SOLO
+                                                </span>
+                                            )}
+                                            {myGuestInThisQueue && (
+                                                <span className="badge badge-xs badge-outline text-purple-300">
+                                                    Guest: {myGuestInThisQueue.username}
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
 
-                            {/* Right: Status/Icon */}
-                            {q.playerIds.includes(user?.uid) && (
-                                <div className="badge badge-accent text-xs">You</div>
-                            )}
-                        </div>
-                    ))}
+                                {/* Right: Status/Icon */}
+                                {user?.isAdmin && !myGuestInThisQueue && (
+                                    <button
+                                        className="btn btn-ghost btn-xs btn-circle text-red-400 hover:bg-red-900/50 ml-1"
+                                        onClick={() => removeQueue(q.id)}
+                                        title="Remove Queue"
+                                    >
+                                        ✕
+                                    </button>
+                                )}
+                                {myGuestInThisQueue && !q.playerIds.includes(user?.uid) && (
+                                    <div className="flex flex-col gap-1 items-end">
+
+                                        {/* 1. START GAME BUTTON (Only if they are 1st in line) */}
+                                        {!isMachineBusy && isMyGuestNext && (
+                                            <button
+                                                className="btn btn-xs btn-warning animate-pulse"
+                                                onClick={() => onGameStart(q)}
+                                                disabled={loading}
+                                            >
+                                                +
+                                            </button>
+                                        )}
+
+                                        {/* 2. LEAVE QUEUE BUTTON */}
+                                        <button
+                                            className="btn btn-xs btn-error btn-outline"
+                                            onClick={() => leaveQueue(myGuestInThisQueue.uid, q.id)} // <--- Pass Guest UID
+                                            disabled={loading}
+                                        >
+                                            x
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        )
+
+                    })}
 
                     {upcomingQueue.length === 0 && (
                         <div className="text-center py-4 text-cyan-300 italic text-sm">
@@ -393,7 +460,10 @@ export default function Queue({ user }) {
                     {waitingList.map((p) => (
                         <div key={p.id} className="badge badge-lg badge-neutral gap-2 p-4 text-zinc-200">
                             <div className={`w-2 h-2 rounded-full ${p.uid === user?.uid ? 'bg-emerald-500' : 'bg-yellow-400'}`} />
-                            {p.username}
+                            {p.username.length > 8
+                                ? `${p.username.slice(0, 8)}...`
+                                : p.username
+                            }
                             {p.addedBy === user?.uid ? (
                                 <button
                                     className="btn btn-ghost btn-xs btn-circle text-red-400 hover:bg-red-900/50 ml-1"
@@ -413,18 +483,13 @@ export default function Queue({ user }) {
                     )}
                 </div>
             </div>
-{/* 
-            {user?.status === UserStatus.WAITING && (
-                <div className="mt-4">
-                    <PartnerFinder user={user} branchId={viewBranch} />
-                </div>
-            )} */}
+
 
             {/* ACTION BUTTONS  */}
 
             {user?.branchId && (user.status === UserStatus.OFFLINE || user.branchId == viewBranch) && (
 
-                <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-3 mt-5">
                     <h3 className="text-xl font-bold text-zinc-300">Join Queue</h3>
                     {myQueueItem && (
                         <button
@@ -452,6 +517,13 @@ export default function Queue({ user }) {
                             </button>
                         </div>
                     )}
+
+                    {user?.status === UserStatus.WAITING && (
+                        <div className="mt-4">
+                            <PartnerFinder user={user} branchId={viewBranch} />
+                        </div>
+                    )}
+
 
                     {!myQueueItem && !myActiveSession && (
                         <>
@@ -503,13 +575,13 @@ export default function Queue({ user }) {
 
                                     <div className="grid grid-cols-2 gap-2">
                                         {/* Option 1: Guest plays alone */}
-                                        {/* <button
+                                        <button
                                             className="btn btn-outline btn-accent btn-sm"
                                             disabled={!guestName.trim() || loading}
                                             onClick={() => handleGuestAction('SOLO')}
                                         >
                                             Guest Solo
-                                        </button> */}
+                                        </button>
 
                                         {/* Option 2: Guest plays WITH ME */}
                                         <button

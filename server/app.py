@@ -1,3 +1,4 @@
+import os
 import random
 from datetime import timedelta
 from flask import Flask, jsonify, request
@@ -15,6 +16,8 @@ from sklearn.pipeline import make_pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, r2_score
 
 app = Flask(__name__)
 CORS(app)
@@ -22,7 +25,9 @@ CORS(app)
 # 1. Initialize Firebase Admin
 # Check if app is already initialized to avoid errors during reloads
 if not firebase_admin._apps:
-    cred = credentials.Certificate("serviceAccountKey.json")
+    
+    key_path = os.environ.get('FIREBASE_KEY_PATH', 'serviceAccountKey.json')
+    cred = credentials.Certificate(key_path)
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
@@ -70,6 +75,34 @@ def get_separated_user_stats(player_ids):
         'p2_style': p2_style,
         'player_count': len(users_data) or 1
     }
+    
+def get_all_historical_queue_data():
+    docs = db.collection('queue')\
+        .where(filter=FieldFilter('status', '==', 'completed'))\
+        .order_by('endedAt', direction=firestore.Query.DESCENDING)\
+        .limit(200)\
+        .stream()
+
+    data = []
+    for doc in docs:
+        d = doc.to_dict()
+        if d.get('startedAt') and d.get('endedAt'):
+            duration = (d['endedAt'].timestamp() - d['startedAt'].timestamp()) / 60
+            
+            if 5 < duration < 40:
+                # UNPACK P1 and P2
+                stats = get_separated_user_stats(d.get('players', []))
+                
+                data.append({
+                    'duration': duration,
+                    'players': stats['player_count'],
+                    'p1_rank': stats['p1_rank'],
+                    'p1_style': stats['p1_style'],
+                    'p2_rank': stats['p2_rank'],
+                    'p2_style': stats['p2_style']
+                })
+    
+    return pd.DataFrame(data)
 
 def get_historical_queue_data_separated(branch_id):
     docs = db.collection('queue')\
@@ -105,19 +138,16 @@ def predict_wait():
     try:
         data = request.json
         branch_id_input = data.get('branchId', 'sisa')
+        user_id_input = data.get('userId')
         
-        # --- STEP 1: FETCH BRANCH CAPACITY ---
-        # Handles case-sensitivity (tries 'sisa' then 'SISA')
+        # --- Fetch numbeer of machines on branch ---
         branch_ref = db.collection('branches').document(branch_id_input)
         branch_doc = branch_ref.get()
-        if not branch_doc.exists:
-             branch_ref = db.collection('branches').document(branch_id_input.upper())
-             branch_doc = branch_ref.get()
         branch_capacity = 1
         if branch_doc.exists:
             branch_capacity = branch_doc.to_dict().get('cabinetCount', 1)
 
-        # --- STEP 2: FETCH UPCOMING QUEUE ---
+        # --- Fetch queue ---
         queue_docs = db.collection('queue')\
             .where(filter=FieldFilter('branchId', '==', branch_id_input))\
             .where(filter=FieldFilter('status', '==', 'queued'))\
@@ -126,25 +156,20 @@ def predict_wait():
         queue_list = [doc.to_dict() for doc in queue_docs]
 
 
-        # --- STEP 3: TRAIN AI MODEL (The "Brain") ---
+        # --- Model Training ---
         df_history = get_historical_queue_data_separated(branch_id_input)
         model = None
-        calculation_method = "static_math" # Default fallback
+        calculation_method = "static_math" 
 
-        # We need at least ~10 games to safely train the model
+        # We need at least 10 games to safely train the model
         if len(df_history) > 10:
             try:
-                # X = Features (Players, P1 Info, P2 Info)
-                # y = Target (Actual Duration)
                 X = df_history[['players', 'p1_rank', 'p1_style', 'p2_rank', 'p2_style']]
                 y = df_history['duration']
                 
-                # PREPROCESSING PIPELINE
                 preprocessor = ColumnTransformer(
                     transformers=[
-                        # Convert Text Styles to Numbers (One-Hot Encoding)
                         ('cat', OneHotEncoder(handle_unknown='ignore'), ['p1_style', 'p2_style']),
-                        # Keep Numbers as they are (impute missing with mean just in case)
                         ('num', SimpleImputer(strategy='mean'), ['players', 'p1_rank', 'p2_rank'])
                     ]
                 )
@@ -157,17 +182,15 @@ def predict_wait():
             except Exception as e:
                 print(f"AI Training Failed (Falling back to math): {e}")
 
-        # --- STEP 4: DEFINE PREDICTION FUNCTION ---
+        # --- Function for prediction ---
         def predict_duration_for_group(item):
             """
             Predicts how long a SPECIFIC group (Solo/Duo) will take.
             """
-            # Unpack the waiting group data exactly like we unpacked history
             stats = get_separated_user_stats(item.get('players', []))
             
             if model:
                 try:
-                    # Create a DataFrame row for the AI input
                     input_df = pd.DataFrame([{
                         'players': stats['player_count'],
                         'p1_rank': stats['p1_rank'],
@@ -187,12 +210,13 @@ def predict_wait():
             songs = 4 if stats['player_count'] >= 2 else 3
             return (songs * 3.5) + 1.5
 
-        # --- STEP 5: RUN MULTI-MACHINE SIMULATION ---
+        # --- Simulating for multiple machines ---
         machine_clocks = [0] * branch_capacity
-        print(f"Machines: {machine_clocks}")
         now = datetime.datetime.now(datetime.timezone.utc)
 
-        # A. Account for ACTIVE games (Currently Playing)
+        found_user_wait_time = None
+
+        # Fetch Active Games
         active_docs = db.collection('queue')\
             .where(filter=FieldFilter('branchId', '==', branch_id_input))\
             .where(filter=FieldFilter('status', '==', 'playing'))\
@@ -209,24 +233,32 @@ def predict_wait():
                 remaining = max(total_expected - elapsed, 1.0)
                 machine_clocks[i] = remaining
 
-        # B. Process the WAITING line
+        # Process the WAITING line
         for item in queue_list:
-            # Ask AI: How long will THIS waiting group take?
             game_duration = predict_duration_for_group(item)
-            print(f"Game Duration: ", game_duration)
             
             # Assign this group to the machine that becomes free soonest
             next_free_machine_index = machine_clocks.index(min(machine_clocks))
+            start_time_for_this_group = machine_clocks[next_free_machine_index]
+            if user_id_input and user_id_input in item.get('players', []):
+                found_user_wait_time = start_time_for_this_group
+            
             machine_clocks[next_free_machine_index] += game_duration
 
         # The estimated wait is the lowest time on the clocks
-        estimated_wait = min(machine_clocks)
+        if found_user_wait_time is not None:
+            final_estimated_wait = found_user_wait_time
+            in_queue = True
+        else:
+            final_estimated_wait = min(machine_clocks)
+            in_queue = False
 
         return jsonify({
-            "estimated_minutes": round(estimated_wait, 2),
+            "estimated_minutes": round(final_estimated_wait, 2),
             "queue_length": len(queue_list),
             "active_machines": branch_capacity,
-            "method": calculation_method
+            "method": calculation_method,
+            "in_queue": in_queue
         })
 
     except Exception as e:
@@ -235,10 +267,6 @@ def predict_wait():
 
 @app.route('/api/find-partner', methods=['POST'])
 def find_partner():
-    """
-    AI-POWERED PARTNER FINDER (KNN)
-    Uses K-Nearest Neighbors to find players with similar Rank and PlayStyle intensity.
-    """
     try:
         req_data = request.json
         requester_id = req_data.get('userId')
@@ -256,12 +284,9 @@ def find_partner():
             d = doc.to_dict()
             uid = doc.id
             
-            # Save the requester separately so we know who to match against
             if uid == requester_id:
                 requester_data = d
             
-            # Convert PlayStyle string to a Number (Intensity)
-            # "Casual" -> 1, "14k Spammer" -> 4
             style_str = d.get('playStyle', 'Casual')
             style_score = PLAY_STYLE_WEIGHTS.get(style_str, 1)
 
@@ -269,7 +294,7 @@ def find_partner():
                 'uid': uid,
                 'username': d.get('username', 'Unknown'),
                 'rank': d.get('rank', 0),
-                'style_score': style_score, # AI needs numbers, not text
+                'style_score': style_score, 
                 'playStyle': style_str
             })
 
@@ -280,40 +305,31 @@ def find_partner():
                 "message": "No other players found in waiting list."
             })
 
-        # --- STEP 2: PREPARE DATA FOR AI ---
+        # --- prepare data ---
         df = pd.DataFrame(users_list)
         
-        # X = The Features (Rank, Style Intensity)
         X = df[['rank', 'style_score']].values
 
-        # IMPORTANT: Feature Scaling
-        # Rank is 0-15000, Style is 0-4. Without scaling, Rank dominates the distance.
-        # StandardScaler balances them so the AI considers both equally.
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
 
-        # --- STEP 3: TRAIN KNN MODEL ---
-        # We want the top 5 matches (plus 1 for the user themselves)
+        # --- train model---
         k = min(len(users_list), 6) 
         
-        # Initialize AI Model
         knn = NearestNeighbors(n_neighbors=k, algorithm='auto', metric='euclidean')
-        knn.fit(X_scaled) # "Train" on the current waiting room
+        knn.fit(X_scaled)
 
-        # --- STEP 4: PREDICT (FIND NEIGHBORS) ---
-        # Find the row index of the requester
+        # --- predict ---
         req_index = df[df['uid'] == requester_id].index[0]
         req_features = X_scaled[req_index].reshape(1, -1)
-        
-        # Ask AI: "Who is closest to this user?"
         distances, indices = knn.kneighbors(req_features)
 
-        # --- STEP 5: FORMAT RESULTS ---
+        # --- results ---
         matches = []
         # Skip the first result (index 0) because it is the user themselves!
         for i in range(1, len(distances[0])):
-            idx = indices[0][i]   # The index in our DataFrame
-            dist = distances[0][i] # The "AI Distance" (Compatibility Score)
+            idx = indices[0][i] 
+            dist = distances[0][i]
             
             matched_user = df.iloc[idx]
             
@@ -335,113 +351,113 @@ def find_partner():
         print(f"KNN Error: {e}")
         return jsonify({"error": str(e)}), 500
     
-@app.route('/api/seed-history', methods=['POST'])
-def seed_history():
+@app.route('/api/test-wait-accuracy', methods=['GET'])
+def test_wait_accuracy():
     try:
-        # 1. FETCH REAL USERS
-        # We need their IDs to make the data look real
-        users_ref = db.collection('users').stream()
-        user_list = [u.id for u in users_ref]
+        # 1. Fetch ALL historical data
+        # (We use 'sisa' or any branch that has data)
+        df = get_all_historical_queue_data()
 
-        if len(user_list) < 2:
-            return jsonify({"error": "Not enough users in DB to seed data! Create at least 2 users first."}), 400
+        if len(df) < 20:
+            return jsonify({"error": "Not enough data. Seed at least 20 games first."})
 
-        batch = db.batch()
-        count = 0
-        
-        # 2. GENERATE 50 MOCK SESSIONS
-        # We simulate games happening over the last 7 days
-        for i in range(50):
-            # A. Pick Random Branch & Type
-            branch = random.choice(['sisa', 'jmall'])
-            game_type = random.choice(['solo', 'sync'])
-            
-            # B. Pick Random Players
-            if game_type == 'solo':
-                players = [random.choice(user_list)]
-            else:
-                # Pick 2 distinct users
-                players = random.sample(user_list, 2)
-            
-            # C. Generate Realistic Timestamps
-            # Random time in the last 7 days
-            days_ago = random.randint(0, 7)
-            hours_ago = random.randint(0, 23)
-            start_time = datetime.datetime.now(datetime.timezone.utc) - timedelta(days=days_ago, hours=hours_ago)
-            
-            # D. Generate Realistic Duration (The "Pattern" for AI)
-            # Solo = 10-14 mins, Sync = 15-22 mins
-            if game_type == 'solo':
-                duration_mins = random.uniform(10.0, 14.0)
-            else:
-                duration_mins = random.uniform(15.0, 22.0)
-                
-            # Add some randomness for "Slow Players" vs "Fast Players"
-            duration_mins += random.uniform(-1.0, 3.0) 
-            
-            end_time = start_time + timedelta(minutes=duration_mins)
+        # 2. Prepare Data
+        X = df[['players', 'p1_rank', 'p1_style', 'p2_rank', 'p2_style']]
+        y = df['duration']
 
-            # E. Create the Document
-            new_ref = db.collection('queue').document()
-            
-            # Mock Data Object
-            doc_data = {
-                'sessionId': new_ref.id,
-                'branchId': branch,
-                'type': game_type,
-                'status': 'completed',
-                'players': players,
-                'playerCount': len(players),
-                'startedAt': start_time,
-                'endedAt': end_time,
-                'createdAt': start_time - timedelta(minutes=5), # Queued 5 mins before
-                'isMock': True # <--- THE INDICATOR
-            }
-            
-            batch.set(new_ref, doc_data)
-            count += 1
+        # 3. SPLIT: 80% for Training, 20% for Testing
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-            # Firestore batches strictly limit to 500 ops. 
-            # We commit every 50 to be safe and clean.
-            if count % 50 == 0:
-                batch.commit()
-                batch = db.batch() # Start new batch
+        # 4. Build Pipeline (Same as your real function)
+        preprocessor = ColumnTransformer(
+            transformers=[
+                ('cat', OneHotEncoder(handle_unknown='ignore'), ['p1_style', 'p2_style']),
+                ('num', SimpleImputer(strategy='mean'), ['players', 'p1_rank', 'p2_rank'])
+            ]
+        )
+        model = make_pipeline(preprocessor, LinearRegression())
 
-        # Commit any remaining
-        if count % 50 != 0:
-            batch.commit()
+        # 5. Train on the 80%
+        model.fit(X_train, y_train)
+
+        # 6. Test on the hidden 20%
+        predictions = model.predict(X_test)
+
+        # 7. Calculate Accuracy Metrics
+        mae = mean_absolute_error(y_test, predictions)
+        r2 = r2_score(y_test, predictions)
 
         return jsonify({
-            "message": f"Successfully seeded {count} mock history items!",
-            "note": "These items have 'isMock: true' so you can query/delete them easily."
+            "total_samples": len(df),
+            "training_samples": len(X_train),
+            "test_samples": len(X_test),
+            "mean_absolute_error": round(mae, 2), # <--- THE IMPORTANT NUMBER
+            "r2_score": round(r2, 4),
+            "interpretation": f"On average, the AI's prediction is off by {round(mae, 2)} minutes."
         })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
-@app.route('/api/clear-mock-data', methods=['DELETE'])
-def clear_mock_data():
+@app.route('/api/test-partner-accuracy', methods=['GET'])
+def test_partner_accuracy():
     try:
-        # Find all docs with isMock == True
-        docs = db.collection('queue').where('isMock', '==', True).stream()
-        
-        deleted = 0
-        batch = db.batch()
-        
-        for doc in docs:
-            batch.delete(doc.reference)
-            deleted += 1
+        # 1. Create a Fake Target (You)
+        # Rank 1000, Casual
+        target_user = { 'uid': 'me', 'rank': 1000, 'style_score': 1 } # Casual=1
+
+        # 2. Create Fake Candidates
+        candidates = [
+            # Candidate A: Perfect Match (Rank 1050, Casual) -> Distance should be tiny
+            { 'uid': 'A', 'username': 'Perfect Match', 'rank': 1050, 'style_score': 1, 'playStyle': 'Casual' },
             
-            if deleted % 50 == 0:
-                batch.commit()
-                batch = db.batch()
-                
-        if deleted % 50 != 0:
-            batch.commit()
+            # Candidate B: Okay Match (Rank 3000, Casual) -> Rank is far, Style is good
+            { 'uid': 'B', 'username': 'Rank Gap', 'rank': 3000, 'style_score': 1, 'playStyle': 'Casual' },
             
-        return jsonify({"message": f"Deleted {deleted} mock records."})
+            # Candidate C: Bad Match (Rank 1000, Spammer) -> Rank is close, Style is opposite
+            { 'uid': 'C', 'username': 'Style Clash', 'rank': 1000, 'style_score': 4, 'playStyle': '14k Spammer' }
+        ]
+
+        # 3. Prepare Data for KNN
+        # Combine target + candidates into one list
+        all_users = [target_user] + candidates
+        df = pd.DataFrame(all_users)
+        
+        X = df[['rank', 'style_score']].values
+
+        # IMPORTANT: Use the scaler!
+        # This checks if your scaling logic is working (Rank vs Style weight)
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+
+        # 4. Train KNN
+        knn = NearestNeighbors(n_neighbors=len(all_users), algorithm='auto', metric='euclidean')
+        knn.fit(X_scaled)
+
+        # 5. Find Neighbors for "me" (index 0)
+        distances, indices = knn.kneighbors([X_scaled[0]])
+
+        # 6. Analyze Results
+        results = []
+        for i in range(1, len(distances[0])): # Skip self
+            idx = indices[0][i]
+            dist = distances[0][i]
+            user_obj = df.iloc[idx]
+            results.append({
+                "username": user_obj.get('username'),
+                "distance": round(dist, 4),
+                "rank": int(user_obj['rank']),
+                "style": int(user_obj['style_score'])
+            })
+
+        return jsonify({
+            "test_scenario": "Target: Rank 1000 (Casual). Candidates: Perfect(1050/Cas), Gap(3000/Cas), Clash(1000/Spam)",
+            "ai_ranking": results,
+            "success_check": results[0]['username'] == 'Perfect Match' # Did AI pick the right one?
+        })
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
+    
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
