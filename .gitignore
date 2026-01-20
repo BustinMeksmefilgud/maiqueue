@@ -67,7 +67,6 @@ web_modules/
 
 # dotenv environment variable files
 .env
-.env.*
 !.env.example
 
 # parcel-bundler cache (https://parceljs.org/)
@@ -143,7 +142,3 @@ server/venv/
 server/__pycache__/
 server/serviceAccountKey.json
 *.pyc
-
-# --- Environment Variables ---
-.env
-
