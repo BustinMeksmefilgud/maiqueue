@@ -234,7 +234,7 @@ export default function Admin({ user }) {
                                             </div>
                                         </div>
                                     </td>
-                                    <td>
+                                    <td className="flex flex-col gap-2">
                                         <button
                                             onClick={() => handleDeleteUser(u.id)}
                                             className="btn btn-xs btn-outline btn-error"

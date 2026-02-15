@@ -549,7 +549,7 @@ export const seedHistory = async () => {
         for (let i = 0; i < 50; i++) {
             // A. Pick Random Branch & Type
             const branch = Math.random() < 0.5 ? 'sisa' : 'jmall';
-            const gameType = Math.random() < 0.5 ? 'solo' : 'sync'; // Assuming your enums are uppercase
+            const gameType = Math.random() < 0.5 ? 'solo' : 'sync'
 
             // B. Pick Random Players
             let players = [];
@@ -597,7 +597,7 @@ export const seedHistory = async () => {
                 sessionId: newRef.id,
                 branchId: branch,
                 type: gameType,
-                status: 'completed', // or QueueStatus.COMPLETED
+                status: 'completed',
                 players: players,
                 playerCount: players.length,
                 // Convert JS Date to Firestore Timestamp
@@ -678,6 +678,7 @@ export const clearMockHistory = async () => {
 };
 
 export const seedMockQueue = async (branchId, totalQueuesToCreate = 5) => {
+  console.log("Branch", branchId)
   try {
     console.log(`Starting seed for ${totalQueuesToCreate} queue items...`);
 
@@ -764,6 +765,7 @@ export const seedMockQueue = async (branchId, totalQueuesToCreate = 5) => {
 };
 
 export const seedWaitingList = async (branchId) => {
+    console.log("Branch", branchId)
     const BATCH_SIZE = 10;
     const batch = writeBatch(db);
     

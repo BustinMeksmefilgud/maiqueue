@@ -36,7 +36,7 @@ PLAY_STYLE_WEIGHTS = {
     "Casual": 1,
     "Chiho Grinder": 3,
     "14k Spammer": 4,
-    "Lone Wolf": 0, # Unlikely to want a partner
+    "Lone Wolf": 0,
     "Solo Boring": 2
 }
 
@@ -45,28 +45,23 @@ def get_separated_user_stats(player_ids):
     Returns specific stats for P1 and P2.
     If P2 is missing, fills with 0/"None".
     """
-    # 1. Fetch all user docs
     users_data = []
     for uid in player_ids:
         doc = db.collection('users').document(uid).get()
         if doc.exists:
             users_data.append(doc.to_dict())
     
-    # 2. Extract P1 (Host)
-    # Default to 0/"Casual" if for some reason list is empty
     p1 = users_data[0] if len(users_data) > 0 else {}
     p1_rank = p1.get('rank', 0)
     p1_style = p1.get('playStyle', 'Casual')
 
-    # 3. Extract P2 (Guest/Partner)
-    # Default to 0/"None" if they don't exist
     if len(users_data) > 1:
         p2 = users_data[1]
         p2_rank = p2.get('rank', 0)
         p2_style = p2.get('playStyle', 'Casual')
     else:
         p2_rank = 0
-        p2_style = "None" # Important: This tells AI "Nobody is here"
+        p2_style = "None" 
 
     return {
         'p1_rank': p1_rank,

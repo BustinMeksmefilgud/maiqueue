@@ -422,7 +422,7 @@ export default function Queue({ user }) {
                                         {/* 1. START GAME BUTTON (Only if they are 1st in line) */}
                                         {!isMachineBusy && isMyGuestNext && (
                                             <button
-                                                className="btn btn-xs btn-warning animate-pulse"
+                                                className="btn btn-ghost btn-xs btn-circle text-green-400 hover:bg-green-900/50 ml-1 animate-pulse"
                                                 onClick={() => onGameStart(q)}
                                                 disabled={loading}
                                             >
@@ -432,11 +432,11 @@ export default function Queue({ user }) {
 
                                         {/* 2. LEAVE QUEUE BUTTON */}
                                         <button
-                                            className="btn btn-xs btn-error btn-outline"
+                                            className="btn btn-ghost btn-xs btn-circle text-red-400 hover:bg-red-900/50 ml-1"
                                             onClick={() => leaveQueue(myGuestInThisQueue.uid, q.id)} // <--- Pass Guest UID
                                             disabled={loading}
                                         >
-                                            x
+                                            ✕
                                         </button>
                                     </div>
                                 )}

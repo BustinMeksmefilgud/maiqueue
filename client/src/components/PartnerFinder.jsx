@@ -24,15 +24,6 @@ export default function PartnerFinder({ user, branchId }) {
 
     const handleInvite = async (partnerName, partnerUid) => {
         if(window.confirm(`Start a Sync game with ${partnerName}?`)) {
-            // try {
-            //     // For now, we reuse the "Pair Host with Guest" logic 
-            //     // In a full app, you'd send an invite notification first.
-            //     await pairHostWithGuest(user.uid, branchId, partnerName); 
-            //     alert("Paired successfully!");
-            //     setIsOpen(false);
-            // } catch (e) {
-            //     alert(e);
-            // }
             console.log("Sending them a pipebomb")
         }
     }
@@ -40,9 +31,9 @@ export default function PartnerFinder({ user, branchId }) {
     // Helper to color-code the AI Score
     // Lower Distance = Better Match
     const getMatchQuality = (dist) => {
-        if (dist < 0.5) return { label: "PERFECT MATCH", color: "badge-success" };
-        if (dist < 1.5) return { label: "GOOD MATCH", color: "badge-primary" };
-        return { label: "OKAY MATCH", color: "badge-warning" };
+        if (dist < 0.5) return { label: "PERFECT", color: "badge-success" };
+        if (dist < 1.5) return { label: "GOOD", color: "badge-primary" };
+        return { label: "OKAY", color: "badge-warning" };
     };
 
     return (
