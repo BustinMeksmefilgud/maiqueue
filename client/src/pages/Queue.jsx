@@ -24,6 +24,7 @@ import { getEstimatedWaitTime } from '../service/AiService.jsx';
 import { UserStatus, QueueType, QueueStatus } from "../model/Enums.jsx";
 
 export default function Queue({ user }) {
+    const GUEST_LIMIT = 2;
 
     const [viewBranch, setViewBranch] = useState(() => {
         const saved = localStorage.getItem("selectedBranch");
@@ -47,7 +48,11 @@ export default function Queue({ user }) {
     const amIWaiting = waitingList.some(p => p.uid === user?.uid);
 
     const myActiveSession = activeGames.find(q => q.playerIds.includes(user?.uid));
+    const myGuestActiveSession = activeGames.find(q => 
+        q.playerIds.some(pid => myGuests.some(guest => guest.uid === pid))
+    );
     const myQueueItem = upcomingQueue.find(q => q.playerIds.includes(user?.uid));
+    const guestLimit = myGuests.length >= GUEST_LIMIT
 
     const isUserNext = !myActiveSession && upcomingQueue.length > 0 && upcomingQueue[0].playerIds.includes(user?.uid);
 
@@ -81,12 +86,12 @@ export default function Queue({ user }) {
         }
     };
 
-    const handleJoin = async (mode) => {
+    const handleJoin = async (playerId, mode) => {
         if (!user || !viewBranch) return;
 
         try {
             setLoading(true);
-            await joinQueue(user.uid, viewBranch, mode, machineCapacity);
+            await joinQueue(playerId, viewBranch, mode, machineCapacity);
         } catch (e) {
             alert("Could not join queue: " + e);
         } finally {
@@ -223,6 +228,14 @@ export default function Queue({ user }) {
                         </Link>
                     </>
                 )}
+                 {user == null && (
+                    <>
+                        <h1 className="text-2xl font-bold text-teal-100">Login to join queue</h1>
+                        <Link to="/login" className="btn bg-teal-600 hover:bg-teal-500 text-white mt-4 border-none w-full max-w-xs shadow-lg">
+                            Login
+                        </Link>
+                    </>
+                )}
                 <BranchSwitcher currentBranch={viewBranch} onBranchChange={handleBranchChange} />
 
                 {user?.branchId && user.branchId !== viewBranch && user.status === UserStatus.WAITING && (
@@ -293,12 +306,12 @@ export default function Queue({ user }) {
                 </div>
             </div>
 
-            {(myActiveSession || activeGames.length > 0 && user?.isAdmin) && (
+            { (myActiveSession || myGuestActiveSession || (activeGames.length > 0 && user?.isAdmin)) && (
                 <div className="mb-6">
                     <button
                         className="btn btn-lg btn-error w-full shadow-xl border-red-500 text-white font-black uppercase tracking-wider animate-pulse"
                         onClick={() => {
-                            const gameToEnd = myActiveSession || activeGames[0];
+                            const gameToEnd = myActiveSession || myGuestActiveSession || activeGames[0];
                             if (gameToEnd) finishGame(gameToEnd.id, gameToEnd.playerIds);
                         }}
                         disabled={loading}
@@ -358,7 +371,7 @@ export default function Queue({ user }) {
                                 {Math.ceil(aiWaitTime)} min wait
                             </div>
                         ) : (
-                            <div clasName="badge gap-1 mt-1 font-mono text-xs p-3">Loading...</div>
+                            <div className="badge gap-1 mt-1 font-mono text-xs p-3">Loading...</div>
                         )}
                     </>
                 )}
@@ -464,17 +477,6 @@ export default function Queue({ user }) {
                                 ? `${p.username.slice(0, 8)}...`
                                 : p.username
                             }
-                            {p.addedBy === user?.uid ? (
-                                <button
-                                    className="btn btn-ghost btn-xs btn-circle text-red-400 hover:bg-red-900/50 ml-1"
-                                    onClick={() => removeGuestFromList(p.uid)}
-                                    title="Remove Guest"
-                                >
-                                    ✕
-                                </button>
-                            ) : (
-                                <span className="w-1"></span>
-                            )}
                         </div>
 
                     ))}
@@ -504,13 +506,13 @@ export default function Queue({ user }) {
                     {!myActiveSession && user?.branchId && user.status == UserStatus.WAITING && (
                         <div className="grid grid-cols-2 gap-4">
                             <button className="btn btn-primary shadow-lg shadow-teal-900/50 border-none text-white"
-                                onClick={() => handleJoin(QueueType.SOLO)}
+                                onClick={() => handleJoin(user.uid, QueueType.SOLO)}
                                 disabled={loading}>
                                 {loading && <span className="loading loading-spinner loading-xs"></span>}
                                 Solo
                             </button>
                             <button className="btn btn-primary shadow-lg shadow-teal-900/50 border-none text-white"
-                                onClick={() => handleJoin(QueueType.SYNC)}
+                                onClick={() => handleJoin(user.uid, QueueType.SYNC)}
                                 disabled={loading}>
                                 {loading && <span className="loading loading-spinner loading-xs"></span>}
                                 Sync
@@ -555,12 +557,61 @@ export default function Queue({ user }) {
 
                     {user?.branchId && (user.status !== UserStatus.IN_QUEUE || user.branchId == viewBranch) && (
                         <div className="flex flex-col gap-6">
+                            {myGuests.map(guest => {
+                                const isGuestBusy = guest.status === UserStatus.IN_QUEUE || guest.status === UserStatus.PLAYING;
+                                
+                                return (
+                                    <div key={guest.uid} className="flex flex-col sm:flex-row justify-between items-center bg-black/30 p-2 rounded-lg border border-white/5 gap-2">
+                                        
+                                        {/* Guest Name & Status */}
+                                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                                            <span className="font-bold text-teal-100 text-sm truncate max-w-[100px]">
+                                                {guest.username}
+                                            </span>
+                                            {isGuestBusy && (
+                                                <span className="badge badge-xs badge-warning">In Game</span>
+                                            )}
+                                        </div>
 
+                                        {/* Guest Action Buttons */}
+                                        {!isGuestBusy && (
+                                                 <div className="flex gap-1 w-full sm:w-auto justify-end">
+                                            <button 
+                                                className="btn btn-xs btn-outline btn-accent"
+                                                disabled={isGuestBusy || loading}
+                                                onClick={() => handleJoin(guest.uid, QueueType.SOLO)}
+                                            >
+                                                Solo
+                                            </button>
+                                            
+                                            <button 
+                                                className="btn btn-xs btn-accent text-white"
+                                                disabled={isGuestBusy || loading}
+                                                onClick={() => handleJoin(guest.uid, QueueType.SYNC)}
+                                            >
+                                                Sync
+                                            </button>
+                                            <button 
+                                                className="btn btn-xs btn-ghost text-red-400 hover:bg-red-900/50"
+                                                disabled={isGuestBusy || loading}
+                                                onClick={() => removeGuestFromList(guest.uid)}
+                                                title="Delete Guest"
+                                            >
+                                                ✕
+                                            </button>
+                                        </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
                             {/* 2. DIRECT ACTIONS */}
                             <div className="bg-zinc-900/80 border border-zinc-700 rounded-xl p-4 shadow-xl">
                                 <h3 className="text-teal-200 font-bold mb-3 text-sm uppercase tracking-wide">
                                     Guest Actions
                                 </h3>
+                                <span className="text-xs font-mono text-zinc-500">
+                                    {myGuests.length} / {GUEST_LIMIT} Guests
+                                </span>
 
                                 {/* B. Guest Quick Play */}
                                 <div className="flex flex-col gap-2">

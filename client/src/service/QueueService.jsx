@@ -482,8 +482,6 @@ export const startGame = async (queueId, playerIds) => {
     startedAt: serverTimestamp()
   });
 
-
-
   playerIds.forEach(uid => {
     const userRef = doc(db, "users", uid);
     batch.update(userRef, {
@@ -496,23 +494,42 @@ export const startGame = async (queueId, playerIds) => {
 };
 
 export const finishGame = async (queueId, playerIds) => {
-  const batch = writeBatch(db);
-
-  const sessionRef = doc(db, "queue", queueId);
-  batch.update(sessionRef, {
-    status: QueueStatus.COMPLETED,
-    endedAt: serverTimestamp()
-  });
-
-  playerIds.forEach(uid => {
-    const userRef = doc(db, "users", uid);
-    batch.update(userRef, {
-      status: UserStatus.WAITING,
-      currentQueueId: null
+  try {
+    // 1. GUARANTEE THE QUEUE CLOSES FIRST
+    const sessionRef = doc(db, "queue", queueId);
+    await updateDoc(sessionRef, {
+      status: QueueStatus.COMPLETED,
+      endedAt: serverTimestamp()
     });
-  });
 
-  await batch.commit();
+    // 2. Safely exit if there are no players
+    if (!playerIds || playerIds.length === 0) {
+      console.log("Queue closed. No players to update.");
+      return;
+    }
+
+    // 3. TRY TO UPDATE EACH PLAYER SAFELY
+    const userUpdatePromises = playerIds.map(async (uid) => {
+      try {
+        const userRef = doc(db, "users", uid);
+        await updateDoc(userRef, {
+          status: UserStatus.WAITING,
+          currentQueueId: null
+        });
+      } catch (userError) {
+        // If the user was deleted (e.g., deleted mock users), it will fail here, 
+        // but it WON'T crash the rest of the function!
+        console.warn(`Could not update user ${uid}, they might be deleted.`);
+      }
+    });
+
+    // Run all user updates at the same time
+    await Promise.all(userUpdatePromises);
+
+  } catch (e) {
+    console.error("Error finishing game:", e);
+    throw e;
+  }
 }
 
 export const switchBranch = async (userId, newBranch) => {
@@ -678,7 +695,6 @@ export const clearMockHistory = async () => {
 };
 
 export const seedMockQueue = async (branchId, totalQueuesToCreate = 5) => {
-  console.log("Branch", branchId)
   try {
     console.log(`Starting seed for ${totalQueuesToCreate} queue items...`);
 
@@ -765,7 +781,6 @@ export const seedMockQueue = async (branchId, totalQueuesToCreate = 5) => {
 };
 
 export const seedWaitingList = async (branchId) => {
-    console.log("Branch", branchId)
     const BATCH_SIZE = 10;
     const batch = writeBatch(db);
     
